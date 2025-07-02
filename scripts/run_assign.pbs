@@ -1,0 +1,23 @@
+#!/bin/bash
+##PBS -q small
+#PBS -q normal
+#PBS -l nodes=1:ppn=16
+#PBS -N fba
+#PBS -l walltime=1:00:00
+#PBS -l mem=64GB
+#PBS -o ./stdout/${PBS_JOBNAME}.o${PBS_JOBID}
+#PBS -e ./stdout/${PBS_JOBNAME}.e${PBS_JOBID}
+#PBS -M zhejied@sjtu.edu.cn
+
+cd $PBS_O_WORKDIR
+ncores=${PBS_NP}
+echo "ncores=$ncores"
+echo `pwd`
+
+module load anaconda/anaconda-mamba
+source activate
+conda deactivate
+
+conda activate desi_fiberassign
+
+time python assign_targets.py --ncores $ncores
