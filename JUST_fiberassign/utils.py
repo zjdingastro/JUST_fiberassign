@@ -1,14 +1,18 @@
 import logging as log
 import numpy as np
+import pandas as pd
 from astropy.table import Table
 from scipy.interpolate import interp1d
 from scipy.spatial import KDTree
 
 
 def get_fiberpos():
-    ifile_fiberpos = "/home/zjding/fiberassignment/JUST/modify_focalplane/just-fiberpos.txt"
-    _,_,_, fp_x, fp_y, fp_z = np.loadtxt(ifile_fiberpos, skiprows=1, unpack=True)
-    fiber_centers = np.vstack([fp_x, fp_y]).T
+    ##ifile_fiberpos = "/home/zjding/fiberassignment/JUST/modify_focalplane/just-fiberpos.txt"
+    ##_,_,_, fp_x, fp_y, fp_z = np.loadtxt(ifile_fiberpos, skiprows=1, unpack=True)
+    ifile_fiberpos = "/home/zjding/fiberassignment/JUST/focalplane/fiberpos.csv"
+    df = pd.read_csv(ifile_fiberpos, names=['radius', 'x', 'y'])
+  
+    fiber_centers = np.vstack([df['x'], df['y']]).T
     return fiber_centers
 
 _platescale = None
