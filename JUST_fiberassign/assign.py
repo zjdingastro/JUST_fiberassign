@@ -4,7 +4,8 @@ from scipy.spatial import KDTree
 
 
 # credit: Yunzhe
-def assign_targets_greedy(fibers_center, targets_pos, targets_ID, priorities, subpriorities, radius = 6, minimum_separation = 1.6):
+#ZD change minimum_separation from 1.6 to 2.0 based on the updated fiber positioner (08-04-2025)
+def assign_targets_greedy(fibers_center, targets_pos, targets_ID, priorities, subpriorities, radius = 6, minimum_separation = 2.0):
     '''
     Parameters
     ----------
