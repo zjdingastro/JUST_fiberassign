@@ -107,7 +107,7 @@ def angular_radius_from_physical(r_physical_mpch: float, z: float,
         角半径 (度)
     """
     # 转换为物理单位 (Mpc)
-    r_physical_mpc = r_physical_mpch * h
+    r_physical_mpc = r_physical_mpch / h
     
     # 计算角直径距离
     d_A = cosmo.angular_diameter_distance(z).to(units.Mpc).value
