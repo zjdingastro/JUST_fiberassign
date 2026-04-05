@@ -87,7 +87,7 @@ setup(
 
     # Additional files to include
     package_data={
-        'JUST_fiberassign': [
+        'py': [
             'survey_strategy/input/*.fits',
         ],
     },

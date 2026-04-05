@@ -1,4 +1,4 @@
 include README.md
-include JUST_fiberassign/survey_strategy/input/*.fits
+include py/survey_strategy/input/*.fits
 recursive-include scripts *.py
 recursive-include nb *.ipynb
