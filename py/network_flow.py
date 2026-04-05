@@ -298,14 +298,20 @@ def build_graph_with_forbidden_assignments(targets_id_list_alltiles, target_id_a
                 # Create auxiliary node: aux node 1 has flow only when target_id_i is assigned to fiber_i
                 aux_node_i = f"aux_{tile_id}_f{fiber_i}_t{target_id_i}"
                 G.add_node(aux_node_i, demand=0)
-                G.add_edge(target_i_node, aux_node_i, capacity=1, weight=0)
+                # G.add_edge(target_i_node, aux_node_i, capacity=1, weight=0)
+                # G.add_edge(fiber_i_node, aux_node_i, capacity=1, weight=0)
+                target_i_weight = 1.0/priority_dict[target_id_i]
+                G.add_edge(target_i_node, fiber_i_node, capacity=1, weight=target_i_weight)
                 G.add_edge(fiber_i_node, aux_node_i, capacity=1, weight=0)
                 G.add_edge(aux_node_i, 'sink', capacity=1, weight=COST_OVERFLOW)
                 
                 # Create auxiliary node: aux node 2 has flow only when target_id_j is assigned to fiber_j
                 aux_node_j = f"aux_{tile_id}_f{fiber_j}_t{target_id_j}"
                 G.add_node(aux_node_j, demand=0)
-                G.add_edge(target_j_node, aux_node_j, capacity=1, weight=0)
+                # G.add_edge(target_j_node, aux_node_j, capacity=1, weight=0)
+                # G.add_edge(fiber_j_node, aux_node_j, capacity=1, weight=0)
+                target_j_weight = 1.0/priority_dict[target_id_j]
+                G.add_edge(target_j_node, fiber_j_node, capacity=1, weight=target_j_weight)
                 G.add_edge(fiber_j_node, aux_node_j, capacity=1, weight=0)
                 G.add_edge(aux_node_j, 'sink', capacity=1, weight=COST_OVERFLOW)
                 
@@ -314,7 +320,8 @@ def build_graph_with_forbidden_assignments(targets_id_list_alltiles, target_id_a
                 G.add_node(constraint_node, demand=0)
                 G.add_edge(aux_node_i, constraint_node, capacity=1, weight=0)
                 G.add_edge(aux_node_j, constraint_node, capacity=1, weight=0)
-                G.add_edge(constraint_node, 'sink', capacity=1, weight=COST_OVERFLOW)
+                #G.add_edge(constraint_node, 'sink', capacity=1, weight=COST_OVERFLOW)
+                G.add_edge(constraint_node, 'sink', capacity=1, weight=0)
     
     # Overflow arc (unassigned targets go directly to sink with high cost)
     G.add_edge('source', 'sink', capacity=N_targets, weight=COST_OVERFLOW)
