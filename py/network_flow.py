@@ -7,7 +7,16 @@ from utils import get_fiberpos, xy2radec
 import networkx as nx
 
 
-def find_targets_in_tile(tile_ra, tile_dec, gal_ra, gal_dec, r_s, r_l):
+def mask_targets_in_tile(tile_ra, tile_dec, gal_ra, gal_dec, r_s, r_l):
+    """ Output the mask of targets that are covered by a JUST tile.
+    tile_ra: RA of one tile
+    tile_dec: DEC of one tile
+    gal_ra: RA of galaxy catalog
+    gal_dec: DEC of galaxy catalog
+    r_s: inner radius of the focalplane (unit: deg)
+    r_l: outer radius of the focalplane (unit: deg)
+    """
+
     tile_coord = SkyCoord(tile_ra, tile_dec, frame='icrs', unit='deg')
     gal_coord = SkyCoord(gal_ra, gal_dec, frame='icrs', unit='deg')
     sep = tile_coord.separation(gal_coord).to(u.deg)
@@ -46,7 +55,7 @@ def find_targets_in_one_tile(args):
     fibers_ra, fibers_dec = xy2radec(tile_ra, tile_dec, fiberpos_xy[:,0], fiberpos_xy[:, 1])
 
     ## find targets falling in the tile coverage 
-    mask = find_targets_in_tile(tile_ra, tile_dec, gal_cat['RA'], gal_cat['DEC'], 
+    mask = mask_targets_in_tile(tile_ra, tile_dec, gal_cat['RA'], gal_cat['DEC'], 
                                  TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG)
     gal_in_tile = gal_cat[mask]
     targets_ra, targets_dec = gal_in_tile['RA'], gal_in_tile['DEC']
