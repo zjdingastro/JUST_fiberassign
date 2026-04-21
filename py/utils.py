@@ -1,4 +1,6 @@
 import logging as log
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from astropy.table import Table
@@ -9,7 +11,8 @@ from scipy.spatial import KDTree
 def get_fiberpos():
     ##ifile_fiberpos = "/home/zjding/fiberassignment/JUST/modify_focalplane/just-fiberpos.txt"
     ##_,_,_, fp_x, fp_y, fp_z = np.loadtxt(ifile_fiberpos, skiprows=1, unpack=True)
-    ifile_fiberpos = "/home/zjding/fiberassignment/JUST/focalplane/fiberpos.csv"
+    _pkg_root = Path(__file__).resolve().parent.parent
+    ifile_fiberpos = _pkg_root / "parameters" / "fiberpos.csv"
     df = pd.read_csv(ifile_fiberpos, names=['radius', 'x', 'y'])
   
     fiber_centers = np.vstack([df['x'], df['y']]).T
@@ -47,8 +50,8 @@ def load_platescale():
     if _platescale is not None:
         return _platescale
 
-    #infile = findfile("focalplane/platescale.txt")
-    infile = "/home/zjding/.conda/envs/desi_fiberassign/data/focalplane/platescale.txt"
+    _pkg_root = Path(__file__).resolve().parent.parent
+    infile = _pkg_root / "parameters" / "platescale.txt"
     columns = [
         ("radius", "f8"),
         ("theta", "f8"),
@@ -64,8 +67,7 @@ def load_platescale():
         # - Get info from separate rzs file instead
 
         _platescale = np.loadtxt(infile, usecols=[0, 1, 6, 7, 7], dtype=columns)
-        #rzs = Table.read(findfile("focalplane/rzsn.txt"), format="ascii")
-        rzs = Table.read("/home/zjding/.conda/envs/desi_fiberassign/data/focalplane/rzsn.txt", format="ascii")
+        rzs = Table.read(_pkg_root / "parameters" / "rzsn.txt", format="ascii")
 
         from scipy.interpolate import interp1d
         from numpy.lib.recfunctions import append_fields
@@ -165,7 +167,6 @@ def get_radius_mm(theta):
         Radii in mm.
     """
     platescale = load_platescale()
-    #platescale = np.loadtxt("/home/zjding/fiberassignment/JUST/modify_focalplane/platescale.txt", unpack=True)
     # Uses a quadratic one-dimensional interpolation to approximate the radius in degrees versus radius in mm
     fn = interp1d(platescale['theta'], platescale['radius'], kind = 'quadratic')
     radius = fn(theta)
@@ -355,12 +356,10 @@ def plot_patrol_circle(center_x, center_y, ax):
     radius = 6.0
     num_points = 100
 
-    # 生成圆周参数方程坐标
     theta = np.linspace(0, 2*np.pi, num_points)
     x = center_x + radius * np.cos(theta)
     y = center_y + radius * np.sin(theta)
 
-    # 绘制
     ax.plot(x, y, 'r-', linewidth=0.5)
     
 
