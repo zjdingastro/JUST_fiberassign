@@ -49,7 +49,7 @@ def find_neighboring_fibers(fiberpos_xy, patrol_center_separation=12.0):
     return neighboring_pairs
 
 def find_targets_in_one_tile(args): 
-    tile_id, tile_ra, tile_dec, gal_cat, fiberpos_xy, TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG, r_patrol_deg = args
+    tile_id, tile_ra, tile_dec, gal_cat, fiberpos_xy, TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG, r_patrol_deg, TARGETID = args
     
     targets_id_list_onetile = {}
     fibers_ra, fibers_dec = xy2radec(tile_ra, tile_dec, fiberpos_xy[:,0], fiberpos_xy[:, 1])
@@ -64,7 +64,7 @@ def find_targets_in_one_tile(args):
     fiber_id = 0    
     for ra, dec in zip(fibers_ra, fibers_dec):
         mask = find_targets_in_patrol_radius(ra, dec, targets_ra, targets_dec, r_patrol_deg)
-        targets_id_list = gal_in_tile['gal_id'][mask].data.tolist()
+        targets_id_list = gal_in_tile[TARGETID][mask].data.tolist()
         if len(targets_id_list)>0:
             targets_id_list_onetile[f'fiber_{fiber_id}']=targets_id_list
         fiber_id += 1
