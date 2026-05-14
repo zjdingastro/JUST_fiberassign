@@ -73,48 +73,6 @@ def find_targets_in_one_tile(args):
     
     return f'tile_{tile_id}', targets_id_list_onetile
 
-def find_collided_pairs_in_one_tile(args):
-    """Compute collision constraints for a single tile in parallel"""
-    tile_id, tile_idx, tiles_ra, tiles_dec, targets_id_list_alltiles, neighboring_fiber_pairs, target_positions, fiberpos_xy, COLLISION_SEPARATION_ARCSEC = args
-    
-    tile_ra, tile_dec = tiles_ra[tile_idx], tiles_dec[tile_idx]
-    
-    # Get RA/DEC positions of all fibers in this tile
-    fibers_ra, fibers_dec = xy2radec(tile_ra, tile_dec, fiberpos_xy[:,0], fiberpos_xy[:, 1])
-    
-    tile_collision_constraints = {}
-    
-    for fiber_i, fiber_j in neighboring_fiber_pairs:
-        fiber_i_key = f'fiber_{fiber_i}'
-        fiber_j_key = f'fiber_{fiber_j}'
-
-        # Check if both fibers have assignable targets in this tile
-        if (fiber_i_key in targets_id_list_alltiles[tile_id] and 
-            fiber_j_key in targets_id_list_alltiles[tile_id]):
-            
-            targets_i = targets_id_list_alltiles[tile_id][fiber_i_key]
-            targets_j = targets_id_list_alltiles[tile_id][fiber_j_key]
-            
-            collision_pairs = []
-            for target_id_i in targets_i:
-                for target_id_j in targets_j:
-                    if target_id_i != target_id_j:
-                        # Compute angular separation between the two targets
-                        ra_i, dec_i = target_positions[target_id_i]
-                        ra_j, dec_j = target_positions[target_id_j]
-                        
-                        coord_i = SkyCoord(ra_i, dec_i, frame='icrs', unit='deg')
-                        coord_j = SkyCoord(ra_j, dec_j, frame='icrs', unit='deg')
-                        sep_arcsec = coord_i.separation(coord_j).to(units.arcsec).value
-                        
-                        # Record as collision pair if angular separation < separation threshold
-                        if sep_arcsec < COLLISION_SEPARATION_ARCSEC:
-                            collision_pairs.append((target_id_i, target_id_j))
-            
-            if len(collision_pairs) > 0:
-                tile_collision_constraints[(tile_id, fiber_i, fiber_j)] = collision_pairs
-    
-    return tile_collision_constraints
 
 ## Compute collision constraints
 ## For each neighboring fiber pair, check which target pairs would collide
@@ -596,3 +554,132 @@ def solve_tile_group(target_positions, group_tile_indices, tiles_ra, tiles_dec, 
         n_assigned = len(_tf)
         n_used_fibers = len(set(_tf.values()))
     return flow_dict_final, cost_final, forbidden_assignments, n_assigned, n_used_fibers
+
+
+def aggregate_group_assignments_with_pairwise_repair(
+    flow_dict,
+    target_ids,
+    all_forbidden,
+    collision_constraints,
+    gal_cat,
+    apply_repair=True,
+    verbose=True,
+):
+    # Aggregate assigned targets/target_to_fiber from a single flow dictionary.
+    node_to_target_id = {f"t_{tid}": int(tid) for tid in target_ids}
+    assigned_targets_set = set()
+    target_to_fiber = {}
+
+    source_flow = flow_dict.get("source", {}) if flow_dict else {}
+    for target_node, source_val in source_flow.items():
+        if source_val != 1 or target_node not in node_to_target_id:
+            continue
+
+        target_flow = flow_dict.get(target_node, {})
+        for next_node, flow_value in target_flow.items():
+            if flow_value == 1 and next_node.startswith("tile_") and "_fiber_" in next_node:
+                target_id = node_to_target_id[target_node]
+                assigned_targets_set.add(target_id)
+                target_to_fiber[target_id] = next_node
+                break
+
+    assigned_targets_id = np.asarray(list(assigned_targets_set))
+
+    def count_violations(current_target_to_fiber):
+        count = 0
+        for (tile_id, fiber_i, fiber_j), collision_pairs in collision_constraints.items():
+            fiber_i_node = f"{tile_id}_fiber_{fiber_i}"
+            fiber_j_node = f"{tile_id}_fiber_{fiber_j}"
+            for target_id_i, target_id_j in collision_pairs:
+                if (
+                    current_target_to_fiber.get(target_id_i) == fiber_i_node
+                    and current_target_to_fiber.get(target_id_j) == fiber_j_node
+                ):
+                    count += 1
+        return count
+
+    violations_before = count_violations(target_to_fiber)
+
+    if verbose:
+        print(f"\n=== Single Tile/Group Complete ===")
+        print(
+            "All constraints satisfied."
+            if violations_before == 0
+            else f"Remaining violations: {violations_before}"
+        )
+
+    removed_targets = set()
+    violations_after = violations_before
+
+    # Resolve each active collision pair by removing lower PRIORITY; if tied, remove lower
+    # SUBPRIORITY; if still tied, remove larger TARGETID.
+    if apply_repair and violations_before > 0:
+        _pmask = np.isin(gal_cat["TARGETID"], target_ids)
+        target_priority = {}
+        target_subpriority = {}
+        for _tid, _pri, _subpri in zip(
+            gal_cat["TARGETID"][_pmask],
+            gal_cat["PRIORITY"][_pmask],
+            gal_cat["SUBPRIORITY"][_pmask],
+        ):
+            _tid = int(_tid)
+            if _tid not in target_priority:
+                target_priority[_tid] = float(_pri)
+                target_subpriority[_tid] = float(_subpri)
+
+        n_before = len(target_to_fiber)
+
+        for (tile_id, fiber_i, fiber_j), collision_pairs in collision_constraints.items():
+            fiber_i_node = f"{tile_id}_fiber_{fiber_i}"
+            fiber_j_node = f"{tile_id}_fiber_{fiber_j}"
+
+            for target_id_i, target_id_j in collision_pairs:
+                ti, tj = int(target_id_i), int(target_id_j)
+
+                if ti in removed_targets or tj in removed_targets:
+                    continue
+
+                active_i = target_to_fiber.get(ti) == fiber_i_node
+                active_j = target_to_fiber.get(tj) == fiber_j_node
+                if not (active_i and active_j):
+                    continue
+
+                pri_i = target_priority.get(ti, 0.0)
+                pri_j = target_priority.get(tj, 0.0)
+
+                if pri_i < pri_j:
+                    remove_tid = ti
+                elif pri_j < pri_i:
+                    remove_tid = tj
+                else:
+                    subpri_i = target_subpriority.get(ti, 0.0)
+                    subpri_j = target_subpriority.get(tj, 0.0)
+                    if subpri_i < subpri_j:
+                        remove_tid = ti
+                    elif subpri_j < subpri_i:
+                        remove_tid = tj
+                    else:
+                        remove_tid = max(ti, tj)
+
+                removed_targets.add(remove_tid)
+                target_to_fiber.pop(remove_tid, None)
+
+        assigned_targets_set = set(target_to_fiber.keys())
+        assigned_targets_id = np.asarray(list(assigned_targets_set))
+        violations_after = count_violations(target_to_fiber)
+
+        if verbose:
+            print(
+                f"Pairwise collision repair: removed {len(removed_targets)} lower-priority "
+                f"targets; kept {len(assigned_targets_set)} / {n_before}. "
+                f"Violations: {violations_before} -> {violations_after}."
+            )
+
+    return {
+        "assigned_targets_id": assigned_targets_id,
+        "assigned_targets_set": assigned_targets_set,
+        "target_to_fiber": target_to_fiber,
+        "violations_before": violations_before,
+        "violations_after": violations_after,
+        "removed_targets": removed_targets,
+    }

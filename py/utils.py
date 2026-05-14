@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from astropy.table import Table
+from astropy.io import fits as astropy_fits
 from scipy.interpolate import interp1d
 from scipy.spatial import KDTree
 
@@ -371,3 +372,83 @@ def get_spherearea(ramin, ramax, decmin, decmax):
     dtheta = np.sin(np.radians(decmax)) - np.sin(np.radians(decmin))   # sintheta*dtheta
     area_deg = dphi*dtheta * (180./np.pi)**2
     return area_deg
+
+
+def write_fba_onetile(
+    tile_id,
+    assigned_targets_id,
+    assigned_fiber_id,
+    targets_id_list_alltiles,
+    out_fits_path=None,
+    overwrite=True,
+):
+    """
+    Write one tile's fiber-assignment result into a FITS file with two table HDUs.
+
+    Parameters
+    ----------
+    tile_id : str
+        Tile key, e.g. "tile_0".
+    assigned_targets_id : array-like
+        Assigned TARGETID values for this tile.
+    assigned_fiber_id : array-like
+        Fiber IDs matching `assigned_targets_id` one-to-one.
+    targets_id_list_alltiles : dict
+        Reachability dictionary, e.g. targets_id_list_alltiles[tile_id]["fiber_<id>"] -> [target ids].
+    out_fits_path : str or None
+        Output FITS path. If None, use "fba_<tile_id>.fits" in current directory.
+    overwrite : bool
+        Whether to overwrite existing file.
+    """
+    if len(assigned_targets_id) != len(assigned_fiber_id):
+        raise ValueError("assigned_targets_id and assigned_fiber_id must have the same length")
+
+    tile_id = str(tile_id)
+    assigned_targets_id = np.asarray(assigned_targets_id, dtype=np.int64)
+    assigned_fiber_id = np.asarray(assigned_fiber_id, dtype=np.int32)
+
+    # HDU1: assigned targets on fibers for this tile.
+    order_assigned = np.lexsort((assigned_targets_id, assigned_fiber_id))
+    tbl_assign = Table(
+        [assigned_targets_id[order_assigned], assigned_fiber_id[order_assigned]],
+        names=["TARGETID", "FIBERID"],
+    )
+
+    # HDU2: all reachable TARGETID-FIBERID pairs for this tile.
+    per_fiber = targets_id_list_alltiles.get(tile_id, {})
+    reachable_pairs = []
+    for fiber_key, tlist in per_fiber.items():
+        if not str(fiber_key).startswith("fiber_"):
+            continue
+        try:
+            fid = int(str(fiber_key).split("_", 1)[1])
+        except Exception:
+            continue
+        for tid in tlist:
+            reachable_pairs.append((int(tid), fid))
+
+    reachable_pairs.sort(key=lambda x: (x[1], x[0]))
+    if reachable_pairs:
+        reach_tids = np.asarray([x[0] for x in reachable_pairs], dtype=np.int64)
+        reach_fids = np.asarray([x[1] for x in reachable_pairs], dtype=np.int32)
+    else:
+        reach_tids = np.asarray([], dtype=np.int64)
+        reach_fids = np.asarray([], dtype=np.int32)
+
+    tbl_reach = Table([reach_tids, reach_fids], names=["TARGETID", "FIBERID"])
+
+    if out_fits_path is None:
+        safe_tile = tile_id.replace("/", "_")
+        out_fits_path = f"fba_{safe_tile}.fits"
+
+    primary_hdu = astropy_fits.PrimaryHDU()
+    hdu_assign = astropy_fits.table_to_hdu(tbl_assign)
+    hdu_assign.name = "ASSIGNED"
+    hdu_reach = astropy_fits.table_to_hdu(tbl_reach)
+    hdu_reach.name = "REACHABLE"
+
+    astropy_fits.HDUList([primary_hdu, hdu_assign, hdu_reach]).writeto(
+        out_fits_path, overwrite=overwrite
+    )
+
+    return out_fits_path
