@@ -441,7 +441,8 @@ def find_overlapped_tile_groups(tiles_ra, tiles_dec, radius_threshold_deg):
 
 def solve_tile_group(target_positions, group_tile_indices, tiles_ra, tiles_dec, targets_id_list_alltiles,
                      target_id_array_unique, priority_array, collision_constraints,
-                     COST_OVERFLOW, N_fibers, max_iterations=10, n_workers=4):
+                     COST_OVERFLOW, N_fibers, max_iterations=10, n_workers=4, eval_workers=1,
+                     max_eval_options=24):
     """
     Solve fiber assignment for a single group of overlapped tiles.
 
@@ -486,10 +487,16 @@ def solve_tile_group(target_positions, group_tile_indices, tiles_ra, tiles_dec, 
         if tile_id in group_tile_ids:
             group_collision_constraints[(tile_id, fiber_i, fiber_j)] = pairs
     
+    group_priority_map = {
+        int(tid): float(pr)
+        for tid, pr in zip(group_targets_id_unique, group_priority_unique)
+    }
+
     # Run iterative optimization for this group
     forbidden_assignments = set()
     flow_dict_final = None
     cost_final = None
+    prev_n_violations = None
     
     for iteration in range(max_iterations):
         G = build_graph_with_forbidden_assignments(
@@ -517,19 +524,57 @@ def solve_tile_group(target_positions, group_tile_indices, tiles_ra, tiles_dec, 
         
         _, target_to_fiber = extract_assigned_targets_from_flow(group_targets_id_unique, flow_dict)
         
-        # Prepare evaluation tasks
-        tasks = [(group_targets_id_list, group_targets_id_unique, group_priority_unique,
-                  group_collision_constraints, COST_OVERFLOW, N_fibers, forbidden_assignments, opt)
-                 for v in violations for opt in opts_fun(v, target_to_fiber)]
-        
+        # Prepare unique candidate options for evaluation.
+        # Many violations map to the same (tile, fiber, target) forbid, so evaluating
+        # duplicates wastes expensive min-cost-flow solves and causes large seed variance.
+        unique_opts = []
+        seen_opts = set()
+        for v in violations:
+            for opt in opts_fun(v, target_to_fiber):
+                if opt in seen_opts:
+                    continue
+                seen_opts.add(opt)
+                unique_opts.append(opt)
+
+        # Bound expensive eval_cost_extra solves. Prefer forbidding lower-priority
+        # targets first because these are more likely to be removed by repair anyway.
+        if max_eval_options is not None and max_eval_options > 0 and len(unique_opts) > max_eval_options:
+            unique_opts = sorted(
+                unique_opts,
+                key=lambda opt: group_priority_map.get(int(opt[2]), float("inf"))
+            )[:max_eval_options]
+
+        tasks = [
+            (
+                group_targets_id_list,
+                group_targets_id_unique,
+                group_priority_unique,
+                group_collision_constraints,
+                COST_OVERFLOW,
+                N_fibers,
+                forbidden_assignments,
+                opt,
+            )
+            for opt in unique_opts
+        ]
+
+        print(
+            f"  Iteration {iteration + 1}/{max_iterations}: "
+            f"violations={len(violations)}, unique_opts={len(unique_opts)}, "
+            f"eval_workers={eval_workers}",
+            flush=True,
+        )
+
         best_costs = {}
         if tasks:
-            with multiprocessing.Pool(processes=min(n_workers, len(tasks))) as pool:
-                results = pool.starmap(eval_cost_extra, tasks)
+            if eval_workers <= 1:
+                results = [eval_cost_extra(*task) for task in tasks]
+            else:
+                with multiprocessing.Pool(processes=min(eval_workers, len(tasks))) as pool:
+                    results = pool.starmap(eval_cost_extra, tasks)
             for task, c in zip(tasks, results):
                 opt = task[-1]
-                if opt not in best_costs or c < best_costs[opt][0]:
-                    best_costs[opt] = (c, opt)
+                best_costs[opt] = (c, opt)
         
         new_forbidden = set()
         for v in violations:
@@ -541,6 +586,19 @@ def solve_tile_group(target_positions, group_tile_indices, tiles_ra, tiles_dec, 
             if best_opt:
                 new_forbidden.add(best_opt)
         
+        # No progress means the next iteration will repeat the same graph/evaluations.
+        # Stop early to avoid spending the full max_iterations with identical work.
+        if not new_forbidden:
+            flow_dict_final, cost_final = flow_dict, cost
+            break
+
+        # If violations do not decrease, stop iterating and let pairwise repair
+        # finish residual conflicts outside this optimizer loop.
+        if prev_n_violations is not None and len(violations) >= prev_n_violations:
+            flow_dict_final, cost_final = flow_dict, cost
+            break
+        prev_n_violations = len(violations)
+
         forbidden_assignments.update(new_forbidden)
         flow_dict_final, cost_final = flow_dict, cost
     
