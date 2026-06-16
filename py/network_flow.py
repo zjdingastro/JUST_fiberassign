@@ -439,9 +439,9 @@ def find_overlapped_tile_groups(tiles_ra, tiles_dec, radius_threshold_deg):
     
     return groups
 
-def solve_tile_group(target_positions, group_tile_indices, tiles_ra, tiles_dec, targets_id_list_alltiles,
+def solve_tile_group(target_positions, group_tile_indices, targets_id_list_alltiles,
                      target_id_array_unique, priority_array, collision_constraints,
-                     COST_OVERFLOW, N_fibers, max_iterations=10, n_workers=4):
+                     COST_OVERFLOW, N_fibers, max_iterations=10, n_workers=4, tiles_id=None):
     """
     Solve fiber assignment for a single group of overlapped tiles.
 
@@ -449,7 +449,10 @@ def solve_tile_group(target_positions, group_tile_indices, tiles_ra, tiles_dec, 
         flow_dict, cost, forbidden_assignments, n_assigned, n_used_fibers
     """
     # Build tile_id list for this group
-    group_tile_ids = [f'tile_{idx}' for idx in group_tile_indices]
+    if tiles_id is None:
+        group_tile_ids = [f'tile_{idx}' for idx in group_tile_indices]
+    else:
+        group_tile_ids = [f'tile_{int(tiles_id[idx])}' for idx in group_tile_indices]
     
     # Filter targets_id_list_alltiles to only include tiles in this group
     group_targets_id_list = {tid: targets_id_list_alltiles[tid] for tid in group_tile_ids if tid in targets_id_list_alltiles}
@@ -469,13 +472,6 @@ def solve_tile_group(target_positions, group_tile_indices, tiles_ra, tiles_dec, 
     group_targets_id_unique = target_id_array_unique[mask]
     group_priority_unique = priority_array[mask]
 
-    # Deduplicate by target id (keep first occurrence). Duplicate rows inflate n_assigned vs n_used_fibers.
-    ## Is the following code necessary?
-    # if len(group_targets_id_unique) > 0:
-    #     _, first_idx = np.unique(group_targets_id_unique, return_index=True)
-    #     keep = np.sort(first_idx)
-    #     group_targets_id_unique = group_targets_id_unique[keep]
-    #     group_priority_unique = group_priority_unique[keep]
 
     if len(group_targets_id_unique) == 0:
         return None, 0, set(), 0, 0
