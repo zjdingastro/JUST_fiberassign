@@ -3,6 +3,8 @@ import pandas as pd
 import logging as log
 from pathlib import Path
 from astropy.table import Table
+import astropy.units as units
+from astropy.coordinates import SkyCoord
 from astropy.io import fits as astropy_fits
 from scipy.interpolate import interp1d
 from scipy.spatial import cKDTree
