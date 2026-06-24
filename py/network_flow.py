@@ -2,13 +2,19 @@ import sys
 import numpy as np
 import astropy.units as units
 from collections import deque
-from astropy.coordinates import SkyCoord
 import multiprocessing
 import networkx as nx
 
 
+def _angular_sep_arcsec_scalar(ra_i_deg, dec_i_deg, ra_j_deg, dec_j_deg):
+    """Great-circle separation in arcsec (matches SkyCoord to ~1e-5 arcsec)."""
+    ra1, dec1 = np.deg2rad(ra_i_deg), np.deg2rad(dec_i_deg)
+    ra2, dec2 = np.deg2rad(ra_j_deg), np.deg2rad(dec_j_deg)
+    dot = np.cos(dec1) * np.cos(dec2) * np.cos(ra1 - ra2) + np.sin(dec1) * np.sin(dec2)
+    return float(np.rad2deg(np.arccos(np.clip(dot, -1.0, 1.0))) * 3600.0)
+
 ## Verify that assignment results satisfy collision constraints
-def check_collision_constraints(flow_dict, target_id_array_unique, targets_id_list_alltiles, 
+def check_collision_constraints(flow_dict, target_id_array_unique,
                                 collision_constraints, target_positions):
     """
     Check whether assignment results satisfy collision constraints.
@@ -16,7 +22,6 @@ def check_collision_constraints(flow_dict, target_id_array_unique, targets_id_li
     Args:
         flow_dict: Flow dict returned by NetworkX min_cost_flow
         target_id_array_unique: Array of all unique target IDs
-        targets_id_list_alltiles: Target assignment dict
         collision_constraints: Collision constraints dict
         target_positions: Target positions dict
 
@@ -25,53 +30,46 @@ def check_collision_constraints(flow_dict, target_id_array_unique, targets_id_li
     """
     if flow_dict is None:
         return []
-    
-    # Extract assignment info: which targets are assigned to which fibers
-    target_to_fiber = {}  # {target_id: (tile_id, fiber_id)}
-    
+
+    source_flow = flow_dict.get("source") or {}
+    target_to_fiber = {}
     for target_id in target_id_array_unique:
-        target_node = f't_{target_id}'
-        if flow_dict.get('source', {}).get(target_node, 0) == 1:
-            # Target is active, find which fiber it is assigned to
-            target_flow = flow_dict.get(target_node, {})
-            for next_node, flow_value in target_flow.items():
-                if flow_value == 1 and next_node.startswith('tile_') and '_fiber_' in next_node:
-                    target_to_fiber[target_id] = next_node
-                    break
-    
+        target_node = f"t_{target_id}"
+        if source_flow.get(target_node, 0) != 1:
+            continue
+        for next_node, flow_value in (flow_dict.get(target_node) or {}).items():
+            if flow_value == 1 and next_node.startswith("tile_") and "_fiber_" in next_node:
+                target_to_fiber[target_id] = next_node
+                break
+
+    fiber_to_targets = {}
+    for target_id, fiber_node in target_to_fiber.items():
+        fiber_to_targets.setdefault(fiber_node, set()).add(target_id)
+
     violations = []
-    
-    # Check each collision constraint
     for (tile_id, fiber_i, fiber_j), collision_pairs in collision_constraints.items():
-        fiber_i_key = f'fiber_{fiber_i}'
-        fiber_j_key = f'fiber_{fiber_j}'
-        fiber_i_node = f"{tile_id}_{fiber_i_key}"
-        fiber_j_node = f"{tile_id}_{fiber_j_key}"
-        
+        fiber_i_node = f"{tile_id}_fiber_{fiber_i}"
+        fiber_j_node = f"{tile_id}_fiber_{fiber_j}"
+        targets_on_i = fiber_to_targets.get(fiber_i_node)
+        targets_on_j = fiber_to_targets.get(fiber_j_node)
+        if not targets_on_i or not targets_on_j:
+            continue
+
         for target_id_i, target_id_j in collision_pairs:
-            # Check if both targets are assigned to neighboring fibers
-            if (target_id_i in target_to_fiber and target_id_j in target_to_fiber):
-                fiber_i_assigned = target_to_fiber[target_id_i] == fiber_i_node
-                fiber_j_assigned = target_to_fiber[target_id_j] == fiber_j_node
-                
-                if fiber_i_assigned and fiber_j_assigned:
-                    # Constraint violation: both targets assigned to neighboring fibers
-                    # Compute actual angular separation
-                    ra_i, dec_i = target_positions[target_id_i]
-                    ra_j, dec_j = target_positions[target_id_j]
-                    coord_i = SkyCoord(ra_i, dec_i, frame='icrs', unit='deg')
-                    coord_j = SkyCoord(ra_j, dec_j, frame='icrs', unit='deg')
-                    sep_arcsec = coord_i.separation(coord_j).to(units.arcsec).value
-                    
-                    violations.append({
-                        'tile_id': tile_id,
-                        'fiber_i': fiber_i,
-                        'fiber_j': fiber_j,
-                        'target_id_i': target_id_i,
-                        'target_id_j': target_id_j,
-                        'separation_arcsec': sep_arcsec
-                    })
-    
+            if target_id_i not in targets_on_i or target_id_j not in targets_on_j:
+                continue
+
+            ra_i, dec_i = target_positions[target_id_i]
+            ra_j, dec_j = target_positions[target_id_j]
+            violations.append({
+                "tile_id": tile_id,
+                "fiber_i": fiber_i,
+                "fiber_j": fiber_j,
+                "target_id_i": target_id_i,
+                "target_id_j": target_id_j,
+                "separation_arcsec": _angular_sep_arcsec_scalar(ra_i, dec_i, ra_j, dec_j),
+            })
+
     return violations
 
 # Enforce global per-fiber capacity via node splitting.
@@ -324,8 +322,7 @@ def solve_tile_group(target_positions, group_tile_indices, targets_id_list_allti
         
         # Check collision constraints - need to use full data structures but only check for this group's tiles
         violations = check_collision_constraints(
-            flow_dict, group_targets_id_unique, group_targets_id_list,
-            group_collision_constraints, target_positions
+            flow_dict, group_targets_id_unique, group_collision_constraints, target_positions
         )
         
         if len(violations) == 0:
