@@ -9,6 +9,9 @@ from astropy.io import fits as astropy_fits
 from scipy.interpolate import interp1d
 from scipy.spatial import cKDTree
 
+def _log(msg):
+    print(msg, flush=True)
+
 
 def get_fiberpos():
     ##ifile_fiberpos = "/home/zjding/fiberassignment/JUST/modify_focalplane/just-fiberpos.txt"
