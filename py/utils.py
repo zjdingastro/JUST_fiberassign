@@ -1,12 +1,16 @@
-import logging as log
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
+import logging as log
+from pathlib import Path
 from astropy.table import Table
+import astropy.units as units
+from astropy.coordinates import SkyCoord
 from astropy.io import fits as astropy_fits
 from scipy.interpolate import interp1d
-from scipy.spatial import KDTree
+from scipy.spatial import cKDTree
+
+def _log(msg):
+    print(msg, flush=True)
 
 
 def get_fiberpos():
@@ -124,14 +128,12 @@ def is_point_in_just(tiles_ra, tiles_dec, ra, dec, radius=None, return_tile_inde
     Notes:
         This function is optimized to query a lot of points.
     """
-    #from scipy.spatial import cKDTree as KDTree
-    #from .focalplane import get_tile_radius_deg
 
     if radius is None:
         radius = get_tile_radius_deg()
 
     tilecenters = _embed_sphere(tiles_ra, tiles_dec)
-    tree = KDTree(tilecenters)
+    tree = cKDTree(tilecenters)
     # radius to 3d distance
     threshold = 2.0 * np.sin(np.radians(radius) * 0.5)
     xyz = _embed_sphere(ra, dec)
@@ -144,9 +146,6 @@ def is_point_in_just(tiles_ra, tiles_dec, ra, dec, radius=None, return_tile_inde
     # ---- added by ZD to accommodate the special shape of JUST focalplane
     threshold_small = 2.0 * np.sin(np.radians(0.0867) * 0.5)  # Shark-Hartmann circle
     injust = (d < threshold)&(d > threshold_small)
-    #tree = KDTree(tilecenters)
-    
-    # ---------------
     
     if return_tile_index:
         return injust, i
@@ -373,6 +372,242 @@ def get_spherearea(ramin, ramax, decmin, decmax):
     area_deg = dphi*dtheta * (180./np.pi)**2
     return area_deg
 
+
+def mask_targets_in_tile(tile_ra, tile_dec, gal_ra, gal_dec, r_s, r_l):
+    """ Output the mask of targets that are covered by a JUST tile.
+    tile_ra: RA of one tile
+    tile_dec: DEC of one tile
+    gal_ra: RA of galaxy catalog
+    gal_dec: DEC of galaxy catalog
+    r_s: inner radius of the focalplane (unit: deg)
+    r_l: outer radius of the focalplane (unit: deg)
+    """
+
+    tile_coord = SkyCoord(tile_ra, tile_dec, frame='icrs', unit='deg')
+    gal_coord = SkyCoord(gal_ra, gal_dec, frame='icrs', unit='deg')
+    sep = tile_coord.separation(gal_coord).to(units.deg)
+    r_s_deg = r_s * units.deg
+    r_l_deg = r_l * units.deg
+    mask = (sep > r_s_deg)&(sep < r_l_deg)
+    return mask
+
+def find_targets_in_patrol_radius(fiber_ra, fiber_dec, targets_ra, targets_dec, r_patrol_deg):
+    fiber_coord = SkyCoord(fiber_ra, fiber_dec, frame='icrs', unit='deg')
+    targets_coord = SkyCoord(targets_ra, targets_dec, frame='icrs', unit='deg')
+    sep = fiber_coord.separation(targets_coord).to(units.deg)
+    mask = (sep<r_patrol_deg*units.deg)
+    return mask
+
+def find_neighboring_fibers(fiberpos_xy, patrol_center_separation=12.0):
+    """Identify physically neighboring fiber pairs based on XY distance"""
+    N_fibers = fiberpos_xy.shape[0]
+    neighboring_pairs = []
+    
+    for i in range(N_fibers):
+        for j in range(i+1, N_fibers):
+            dx = fiberpos_xy[i, 0] - fiberpos_xy[j, 0]
+            dy = fiberpos_xy[i, 1] - fiberpos_xy[j, 1]
+            distance_mm = np.sqrt(dx*dx + dy*dy)
+            
+            if distance_mm < patrol_center_separation:
+                neighboring_pairs.append((i, j))
+    
+    return neighboring_pairs
+
+
+def _radec_deg_to_unit_xyz(ra_deg, dec_deg):
+    """ICRS (RA, Dec) in degrees -> unit vectors on the celestial sphere."""
+    ra = np.deg2rad(np.asarray(ra_deg, dtype=np.float64))
+    dec = np.deg2rad(np.asarray(dec_deg, dtype=np.float64))
+    cos_dec = np.cos(dec)
+    return np.column_stack([cos_dec * np.cos(ra), cos_dec * np.sin(ra), np.sin(dec)])
+
+
+def find_targets_in_one_tile(args):
+    tile_id, tile_ra, tile_dec, gal_cat, fiberpos_xy, TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG, r_patrol_deg, TARGETID = args
+
+    targets_id_list_onetile = {}
+    fibers_ra, fibers_dec = xy2radec(tile_ra, tile_dec, fiberpos_xy[:, 0], fiberpos_xy[:, 1])
+
+    # Targets in the tile annulus (unchanged from the reference implementation).
+    mask = mask_targets_in_tile(
+        tile_ra, tile_dec, gal_cat["RA"], gal_cat["DEC"],
+        TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG,
+    )
+    gal_in_tile = gal_cat[mask]
+    if len(gal_in_tile) == 0:
+        return f"tile_{tile_id}", targets_id_list_onetile
+
+    targets_ra = np.asarray(gal_in_tile["RA"], dtype=np.float64)
+    targets_dec = np.asarray(gal_in_tile["DEC"], dtype=np.float64)
+    target_ids = np.asarray(gal_in_tile[TARGETID])
+
+    # Vectorized patrol-radius test for all fibers at once (same sep < r_patrol rule).
+    fibers_xyz = _radec_deg_to_unit_xyz(fibers_ra, fibers_dec)
+    targets_xyz = _radec_deg_to_unit_xyz(targets_ra, targets_dec)
+    cos_sep = np.clip(fibers_xyz @ targets_xyz.T, -1.0, 1.0)
+    sep_deg = np.degrees(np.arccos(cos_sep))
+    in_patrol = sep_deg < float(r_patrol_deg)
+
+    for fiber_id in np.flatnonzero(in_patrol.any(axis=1)):
+        idx = np.flatnonzero(in_patrol[fiber_id])
+        targets_id_list = target_ids[idx].tolist()
+        if len(targets_id_list) > 0:
+            targets_id_list_onetile[f"fiber_{fiber_id}"] = targets_id_list
+
+    return f"tile_{tile_id}", targets_id_list_onetile
+
+
+## Compute collision constraints
+## For each neighboring fiber pair, check which target pairs would collide
+## If angular separation between two targets < 15.625 arcsec, they cannot both be assigned to neighboring fibers
+def _angular_sep_arcsec_matrix(ra1_deg, dec1_deg, ra2_deg, dec2_deg):
+    """Pairwise angular separation in arcsec; inputs shape (n,) and (m,) -> (n, m)."""
+    ra1 = np.deg2rad(np.asarray(ra1_deg, dtype=np.float64)).reshape(-1, 1)
+    dec1 = np.deg2rad(np.asarray(dec1_deg, dtype=np.float64)).reshape(-1, 1)
+    ra2 = np.deg2rad(np.asarray(ra2_deg, dtype=np.float64)).reshape(1, -1)
+    dec2 = np.deg2rad(np.asarray(dec2_deg, dtype=np.float64)).reshape(1, -1)
+    sin_ddec = np.sin(0.5 * (dec2 - dec1))
+    sin_dra = np.sin(0.5 * (ra2 - ra1))
+    a = sin_ddec * sin_ddec + np.cos(dec1) * np.cos(dec2) * sin_dra * sin_dra
+    sep_rad = 2.0 * np.arcsin(np.minimum(1.0, np.sqrt(a)))
+    return np.rad2deg(sep_rad) * 3600.0
+
+
+def _build_target_position_lookup(target_positions):
+    """Sorted TARGETID -> (ra, dec) arrays for fast vectorized lookup."""
+    n_pos = len(target_positions)
+    target_ids = np.empty(n_pos, dtype=np.int64)
+    ra_lookup = np.empty(n_pos, dtype=np.float64)
+    dec_lookup = np.empty(n_pos, dtype=np.float64)
+    for k, (tid, (ra, dec)) in enumerate(target_positions.items()):
+        target_ids[k] = int(tid)
+        ra_lookup[k] = ra
+        dec_lookup[k] = dec
+    order = np.argsort(target_ids)
+    return target_ids[order], ra_lookup[order], dec_lookup[order]
+
+
+def _positions_for_target_ids(target_ids, sorted_ids, ra_sorted, dec_sorted):
+    ids = np.asarray(target_ids, dtype=np.int64)
+    pos = np.searchsorted(sorted_ids, ids)
+    valid = (pos < len(sorted_ids)) & (sorted_ids[pos] == ids)
+    pos = pos[valid]
+    return ids[valid], ra_sorted[pos], dec_sorted[pos]
+
+
+def find_collided_pairs_in_one_tile(args):
+    """Compute collision constraints for a single tile, for parallelization."""
+    (tile_id, tile_idx, tiles_ra, tiles_dec, targets_id_list_alltiles,
+     neighboring_fiber_pairs, target_positions, fiberpos_xy,
+     COLLISION_SEPARATION_ARCSEC) = args
+
+    tile_targets = targets_id_list_alltiles[tile_id]
+    if not tile_targets:
+        return {}
+
+    sorted_ids, ra_sorted, dec_sorted = _build_target_position_lookup(
+        target_positions
+    )
+    sep_max = float(COLLISION_SEPARATION_ARCSEC)
+    tile_collision_constraints = {}
+
+    for fiber_i, fiber_j in neighboring_fiber_pairs:
+        fiber_i_key = f"fiber_{fiber_i}"
+        fiber_j_key = f"fiber_{fiber_j}"
+        if fiber_i_key not in tile_targets or fiber_j_key not in tile_targets:
+            continue
+
+        ids_i, ra_i, dec_i = _positions_for_target_ids(
+            tile_targets[fiber_i_key], sorted_ids, ra_sorted, dec_sorted
+        )
+        ids_j, ra_j, dec_j = _positions_for_target_ids(
+            tile_targets[fiber_j_key], sorted_ids, ra_sorted, dec_sorted
+        )
+        if len(ids_i) == 0 or len(ids_j) == 0:
+            continue
+
+        sep = _angular_sep_arcsec_matrix(ra_i, dec_i, ra_j, dec_j)
+        hit = sep < sep_max
+        hit &= ids_i[:, None] != ids_j[None, :]
+
+        ri, cj = np.nonzero(hit)
+        if ri.size == 0:
+            continue
+        tile_collision_constraints[(tile_id, fiber_i, fiber_j)] = list(
+            zip(ids_i[ri], ids_j[cj])
+        )
+
+    return tile_collision_constraints
+
+
+
+def find_overlapped_tile_groups(tiles_ra, tiles_dec, radius_threshold_deg):
+    """
+    Find groups of overlapped tiles using KD-tree.
+    
+    Args:
+        tiles_ra: array of tile RA coordinates
+        tiles_dec: array of tile DEC coordinates
+        radius_threshold_deg: distance threshold for considering tiles as overlapped
+    
+    Returns:
+        list of lists: each inner list contains tile indices that form a group
+    """
+    n_tiles = len(tiles_ra)
+    if n_tiles == 0:
+        return []
+    
+    # Convert RA/DEC to 3D Cartesian coordinates for accurate spherical distance
+    # Using astropy for proper celestial coordinate handling
+    
+    coords = SkyCoord(tiles_ra * units.deg, tiles_dec * units.deg, frame='icrs')
+    xyz = np.column_stack([coords.cartesian.x, coords.cartesian.y, coords.cartesian.z])
+    
+    # Build KD-tree
+    tree = cKDTree(xyz)
+    
+    # Calculate chord length threshold from angular separation
+    # chord_length = 2 * sin(angle/2) for unit sphere
+    max_sep_rad = np.deg2rad(radius_threshold_deg)
+    chord_threshold = 2 * np.sin(max_sep_rad / 2)
+    
+    # Find all pairs within threshold
+    pairs = tree.query_pairs(chord_threshold, p=2)
+    
+    # Build adjacency list for connected components
+    adjacency = {i: set() for i in range(n_tiles)}
+    for i, j in pairs:
+        adjacency[i].add(j)
+        adjacency[j].add(i)
+    
+    # Also add self-loops so isolated tiles form their own group
+    for i in range(n_tiles):
+        if i not in adjacency:
+            adjacency[i] = set()
+    
+    # Find connected components using BFS
+    visited = set()
+    groups = []
+    
+    for start in range(n_tiles):
+        if start in visited:
+            continue
+        # BFS to find all connected tiles
+        group = []
+        queue = [start]
+        visited.add(start)
+        while queue:
+            node = queue.pop(0)
+            group.append(node)
+            for neighbor in adjacency[node]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+        groups.append(group)
+    
+    return groups
+    
 
 def write_fba_onetile(
     tile_id,
