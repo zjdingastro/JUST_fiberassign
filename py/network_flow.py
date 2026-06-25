@@ -118,7 +118,7 @@ def build_graph_with_forbidden_assignments(
                     continue
                 target_node = f"t_{target_id}"
                 priority = max(priority_dict[target_id], 1e-12)
-                G.add_edge(target_node, fiber_in, capacity=1, weight=1.0 / priority)
+                G.add_edge(target_node, fiber_in, capacity=1, weight = -1.0*priority)
 
             G.add_edge(fiber_out, tile_id, capacity=1, weight=0)
 
