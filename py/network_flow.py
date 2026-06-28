@@ -79,7 +79,8 @@ def check_collision_constraints(flow_dict, target_id_array_unique,
 def build_graph_with_forbidden_assignments(
     targets_id_list_alltiles,
     target_id_array_unique,
-    priority_array,
+    priority,
+    subpriority,
     collision_constraints,
     COST_OVERFLOW,
     N_fibers,
@@ -95,8 +96,11 @@ def build_graph_with_forbidden_assignments(
     G.add_node("sink", demand=N_targets)
 
     priority_dict = {}
-    for target_id, priority in zip(target_id_array_unique, priority_array):
-        priority_dict[target_id] = float(priority)
+    subpriority_dict = {}
+    for target_id, pri, subpri in zip(target_id_array_unique, priority, subpriority):
+        #priority_dict[target_id] = max(float(pri) + float(subpri), 1e-12)
+        priority_dict[target_id] = pri
+        subpriority_dict[target_id] = subpri
         target_node = f"t_{target_id}"
         G.add_node(target_node, demand=0)
         G.add_edge("source", target_node, capacity=1, weight=0)
@@ -117,8 +121,9 @@ def build_graph_with_forbidden_assignments(
                 if (tile_id, fiber_id, target_id) in forbidden_assignments:
                     continue
                 target_node = f"t_{target_id}"
-                priority = max(priority_dict[target_id], 1e-12)
-                G.add_edge(target_node, fiber_in, capacity=1, weight = 1.0/priority)
+                ##priority_total = priority_dict[target_id]
+                ##G.add_edge(target_node, fiber_in, capacity=1, weight = 1.0/priority_total)
+                G.add_edge(target_node, fiber_in, capacity=1, weight=COST_OVERFLOW / priority_dict[target_id] - subpriority_dict[target_id])
 
             G.add_edge(fiber_out, tile_id, capacity=1, weight=0)
 
@@ -171,7 +176,8 @@ def build_graph_with_forbidden_assignments(
 def eval_cost_extra(
     targets_id_list_alltiles,
     target_id_array_unique,
-    priority_array,
+    priority,
+    subpriority,
     collision_constraints,
     COST_OVERFLOW,
     N_fibers,
@@ -183,7 +189,8 @@ def eval_cost_extra(
         G = build_graph_with_forbidden_assignments(
             targets_id_list_alltiles,
             target_id_array_unique,
-            priority_array,
+            priority,
+            subpriority,
             collision_constraints,
             COST_OVERFLOW,
             N_fibers,
@@ -260,14 +267,17 @@ def opts_fun(v, tf):
 
 
 def solve_tile_group(target_positions, group_tile_indices, targets_id_list_alltiles,
-                     target_id_array_unique, priority_array, collision_constraints,
-                     COST_OVERFLOW, N_fibers, max_iterations=10, n_workers=4, tiles_id=None):
+                     target_id_array_unique, priority, subpriority, collision_constraints,
+                     COST_OVERFLOW, N_fibers, max_iterations=10, n_workers=4, tiles_id=None,
+                     max_eval_options=None):
     """
     Solve fiber assignment for a single group of overlapped tiles.
 
     Returns:
         flow_dict, cost, forbidden_assignments, n_assigned, n_used_fibers
     """
+    eval_workers = max(1, n_workers)
+
     # Build tile_id list for this group
     if tiles_id is None:
         group_tile_ids = [f'tile_{idx}' for idx in group_tile_indices]
@@ -287,11 +297,11 @@ def solve_tile_group(target_positions, group_tile_indices, targets_id_list_allti
             for fiber_id, target_list in targets_id_list_alltiles[tile_id].items():
                 group_target_ids_set.update(target_list)
     
-    # Filter target_id_array_unique and priority_array to only include targets in this group
+    # Filter target_id_array_unique and priority/subpriority to targets in this group
     mask = np.isin(target_id_array_unique, list(group_target_ids_set))
     group_targets_id_unique = target_id_array_unique[mask]
-    group_priority_unique = priority_array[mask]
-
+    group_priority = np.asarray(priority, dtype=np.float64)[mask]
+    group_subpriority = np.asarray(subpriority, dtype=np.float64)[mask]
 
     if len(group_targets_id_unique) == 0:
         return None, 0, set(), 0, 0
@@ -303,8 +313,8 @@ def solve_tile_group(target_positions, group_tile_indices, targets_id_list_allti
             group_collision_constraints[(tile_id, fiber_i, fiber_j)] = pairs
     
     group_priority_map = {
-        int(tid): float(pr)
-        for tid, pr in zip(group_targets_id_unique, group_priority_unique)
+        int(tid): float(pri) + float(subpri)
+        for tid, pri, subpri in zip(group_targets_id_unique, group_priority, group_subpriority)
     }
 
     # Run iterative optimization for this group
@@ -315,7 +325,7 @@ def solve_tile_group(target_positions, group_tile_indices, targets_id_list_allti
     
     for iteration in range(max_iterations):
         G = build_graph_with_forbidden_assignments(
-            group_targets_id_list, group_targets_id_unique, group_priority_unique,
+            group_targets_id_list, group_targets_id_unique, group_priority, group_subpriority,
             group_collision_constraints, COST_OVERFLOW, N_fibers, forbidden_assignments
         )
         
@@ -362,7 +372,8 @@ def solve_tile_group(target_positions, group_tile_indices, targets_id_list_allti
             (
                 group_targets_id_list,
                 group_targets_id_unique,
-                group_priority_unique,
+                group_priority,
+                group_subpriority,
                 group_collision_constraints,
                 COST_OVERFLOW,
                 N_fibers,

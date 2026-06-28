@@ -23,7 +23,7 @@ import network_flow as _network_flow_module
 import contextlib
 
 
-COST_OVERFLOW = 10   # self defined, can be dependent on target priority
+COST_OVERFLOW = 10000.0   # self defined, can be dependent on target priority
 N_FIBERS = 2184
 
 max_iterations=1   # does not matter for the debelended set of targets
@@ -263,9 +263,11 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
             f"no targets in tile annulus"
         )
 
-    target_id_array_unique = np.unique(gal_in_tile["TARGETID"])
-
-    priority_total = gal_in_tile["PRIORITY"] + gal_in_tile["SUBPRIORITY"]
+    _, first_idx = np.unique(gal_in_tile["TARGETID"], return_index=True)
+    first_rows = gal_in_tile[np.sort(first_idx)]
+    target_id_array_unique = first_rows["TARGETID"]
+    priority = first_rows["PRIORITY"]
+    subpriority = first_rows["SUBPRIORITY"]
 
     tile_key, targets_id_list = find_targets_in_one_tile((
         tile_id, tile_ra, tile_dec, gal_in_tile, fiberpos_xy,
@@ -279,8 +281,6 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
     ))
     targets_id_list_alltiles_reachable = {tile_key: targets_id_list_reachable}
     
-    _, first_idx = np.unique(gal_in_tile["TARGETID"], return_index=True)
-    first_rows = gal_in_tile[np.sort(first_idx)]
     target_positions = {
         int(tid): (float(ra), float(dec))
         for tid, ra, dec in zip(first_rows["TARGETID"], first_rows["RA"], first_rows["DEC"])
@@ -302,7 +302,7 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
         with _avoid_nested_pool_in_solve():
             flow_dict, cost, forbidden, n_assigned, n_used_fibers = solve_tile_group(
                 target_positions, [0], targets_id_list_alltiles,
-                target_id_array_unique, priority_total, collision_constraints,
+                target_id_array_unique, priority, subpriority, collision_constraints,
                 COST_OVERFLOW, N_FIBERS,
                 max_iterations=max_iterations,
                 n_workers=eval_workers,
@@ -311,7 +311,7 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
     else:
         flow_dict, cost, forbidden, n_assigned, n_used_fibers = solve_tile_group(
             target_positions, [0], targets_id_list_alltiles,
-            target_id_array_unique, priority_total, collision_constraints,
+            target_id_array_unique, priority, subpriority, collision_constraints,
             COST_OVERFLOW, N_FIBERS,
             max_iterations=max_iterations,
             n_workers=eval_workers,
