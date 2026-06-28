@@ -5,8 +5,12 @@
 #
 # Example:
 #   python mcf_singletiles_debelend.py \
-#     --rmagcut 20.5 --Npasses 3 \
+#     --mock_version "v1" \
+#     --input_mockpath "/home/zjding/fiberassignment/JUST/BGS_mock/Junyu_mock/data/v1/lightcone_ra_0_90_dec_0_90_rmagcut20.5.fits" \
+#     --input_tilepath "/home/zjding/fiberassignment/JUST/BGS_mock/Junyu_mock/fba/input/tiles_4passes.fits" \
+#     --output_fba_path "/home/zjding/fiberassignment/JUST/BGS_mock/Junyu_mock/fba/output/" \
 #     --ra0 30 --ra1 40 --dec0 10 --dec1 20 \
+#     --Npasses 3 \
 #     --n_workers 8 --eval_workers 1 \
 #     --max_iterations 1 --rand_seed 100 --nside 32
 
@@ -54,7 +58,10 @@ def _list_completed_tiles(out_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rmagcut", type=float, default=20.5)
+    parser.add_argument("--input_mockpath", type=str, default="/home/zjding/fiberassignment/JUST/BGS_mock/Junyu_mock/data/v1/lightcone_ra_0_90_dec_0_90_rmagcut20.5.fits")
+    parser.add_argument("--input_tilepath", type=str, default="/home/zjding/fiberassignment/JUST/BGS_mock/Junyu_mock/fba/input/tiles_4passes.fits")
+    parser.add_argument("--output_fba_path", type=str, default="/home/zjding/fiberassignment/JUST/BGS_mock/Junyu_mock/fba/output/v1/")
+    parser.add_argument("--mock_version", type=str, default="v1")
     parser.add_argument("--Npasses", type=int, default=3)
     parser.add_argument("--ra0", type=float, default=30.0)
     parser.add_argument("--ra1", type=float, default=40.0)
@@ -77,7 +84,10 @@ def main():
     parser.add_argument("--nside", type=int, default=32, help="HEALPix nside for MTL pixel split")
     args = parser.parse_args()
 
-    rmagcut = args.rmagcut
+    input_mockpath = args.input_mockpath
+    input_tilepath = args.input_tilepath
+    output_fba_path = args.output_fba_path
+    mock_version = args.mock_version
     Npasses = args.Npasses
     ra0 = args.ra0
     ra1 = args.ra1
@@ -112,9 +122,8 @@ def main():
     N_fibers = fiberpos_xy.shape[0]
     _log(f"Number of fibers: {N_fibers}")
 
-    dir_root = "/home/zjding/fiberassignment/JUST/BGS_mock/Junyu_mock/"
-    ifile = dir_root + f"data/lightcone_ra_0_90_dec_0_90_rmagcut{rmagcut}.fits"
-    input_cat = Table.read(ifile)
+
+    input_cat = Table.read(input_mockpath)
     mask = (
         (input_cat["ra"] > ra0)
         & (input_cat["ra"] < ra1)
@@ -124,8 +133,8 @@ def main():
     input_cat = input_cat[mask]
 
     gal_MTL = Table()
-    priority_initial = 4.0
-    priority_degraded = 1.0
+    priority_initial = 100.0
+    priority_degraded = 2.0
     columns = ["TARGETID", "RA", "DEC", "PRIORITY", "SUBPRIORITY"]
 
     for col in columns:
@@ -144,8 +153,8 @@ def main():
     del input_cat
     gc.collect()
 
-    ifile = dir_root + "fba/input/tiles_4passes.fits"
-    tile_data = Table.read(ifile)
+
+    tile_data = Table.read(input_tilepath)
     tile_ra0, tile_ra1 = ra0 + TILE_OUTER_RADIUS_DEG, ra1 - TILE_OUTER_RADIUS_DEG
     tile_dec0, tile_dec1 = dec0 + TILE_OUTER_RADIUS_DEG, dec1 - TILE_OUTER_RADIUS_DEG
 
@@ -165,9 +174,8 @@ def main():
     _log(f"There are {len(neighboring_fiber_pairs)} paired fibers in one tile")
 
     out_dir = (
-        dir_root
-        + f"fba/output/{Npasses}passes/{N_tiles}tiles_"
-        f"{ra0:.1f}ra{ra1:.1f}_{dec0:.1f}dec{dec1:.1f}/seed{rand_seed}/"
+        output_fba_path
+        + f"{Npasses}passes/{N_tiles}tiles_{ra0:.1f}ra{ra1:.1f}_{dec0:.1f}dec{dec1:.1f}/seed{rand_seed}/"
     )
     os.makedirs(out_dir, exist_ok=True)
 
