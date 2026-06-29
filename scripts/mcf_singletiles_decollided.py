@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-# Single-tile fiber assignment with priority-weighted deblending before MCF.
+# Single-tile fiber assignment with priority-weighted decolliding before MCF.
 # Based on mcf_singletiles_speedup_v0.14.ipynb; core tile logic lives in fba_single_tile.py.
 #
 # Example:
@@ -41,17 +41,18 @@ from fba_single_tile import (
     _degrade_mtl_priorities_on_disk,
     _fits_path_for_tile,
     _healpix_ids_for_disc,
-    fba_onetile_deblend,
+    fba_onetile_decollided,
     fba_onetile,
     load_galaxies_from_mtlpix,
 )
 
 
-DEBLEND_TIMEOUT_SEC = 10.0
+DECOLLIDED_TIMEOUT_SEC = 10.0
+FALLBACK_TIMEOUT_SEC = 180.0   # change this according to the number of iterations
 
 
 class FBAOnetileTimeout(TimeoutError):
-    """Raised when fba_onetile_deblend exceeds the per-tile time limit."""
+    """Raised when fba_onetile_decollided exceeds the per-tile time limit."""
 
 
 def _run_with_timeout(timeout_sec, func, *args, **kwargs):
@@ -74,19 +75,35 @@ def _run_with_timeout(timeout_sec, func, *args, **kwargs):
         signal.signal(signal.SIGALRM, previous_handler)
 
 
-def _deblend_fail_path(out_dir):
-    return os.path.join(out_dir, "fba_deblend_timeout_tiles.txt")
+def _decollided_fail_path(out_dir):
+    return os.path.join(out_dir, "fba_decollided_timeout_tiles.txt")
 
 
-def _record_deblend_fail(tile_id, fail_path):
-    """Append a TILEID that timed out in fba_onetile_deblend."""
-    with open(fail_path, "a", encoding="utf-8") as f:
+def _skipped_tiles_path(out_dir):
+    return os.path.join(out_dir, "fba_skipped_tiles.txt")
+
+
+def _tile_ids_from_file(path):
+    if not os.path.isfile(path):
+        return set()
+    with open(path, encoding="utf-8") as f:
+        return {int(line.strip()) for line in f if line.strip()}
+
+
+def _append_tile_id(tile_id, path):
+    """Append one TILEID per line to a persistent tile list."""
+    with open(path, "a", encoding="utf-8") as f:
         f.write(f"{int(tile_id)}\n")
         f.flush()
         os.fsync(f.fileno())
 
 
-def _fba_onetile_deblend_or_fallback(
+def _record_decollided_fail(tile_id, fail_path):
+    """Append a TILEID that timed out in fba_onetile_decollided."""
+    _append_tile_id(tile_id, fail_path)
+
+
+def _fba_onetile_decollided_or_fallback(
     tile_ra,
     tile_dec,
     tile_id,
@@ -94,15 +111,17 @@ def _fba_onetile_deblend_or_fallback(
     neighboring_fiber_pairs,
     fiberpos_xy,
     eval_workers,
-    deblend_fail_path,
-    deblend_timeout_sec=DEBLEND_TIMEOUT_SEC,
+    decollided_fail_path,
+    skipped_tiles_path,
+    decollided_timeout_sec=DECOLLIDED_TIMEOUT_SEC,
+    fallback_timeout_sec=FALLBACK_TIMEOUT_SEC,
 ):
-    """Try fba_onetile_deblend; on timeout fall back to fba_onetile."""
+    """Try fba_onetile_decollided; on timeout fall back to fba_onetile."""
     t0 = time.time()
     try:
         result = _run_with_timeout(
-            deblend_timeout_sec,
-            fba_onetile_deblend,
+            decollided_timeout_sec,
+            fba_onetile_decollided,
             tile_ra,
             tile_dec,
             tile_id,
@@ -112,28 +131,38 @@ def _fba_onetile_deblend_or_fallback(
             eval_workers,
         )
         _log(
-            f"  fba_onetile_deblend finished in {time.time() - t0:.2f}s"
+            f"  fba_onetile_decollided finished in {time.time() - t0:.2f}s"
         )
         return result
     except FBAOnetileTimeout as exc:
         elapsed = time.time() - t0
-        _record_deblend_fail(tile_id, deblend_fail_path)
+        _record_decollided_fail(tile_id, decollided_fail_path)
         _log(
             f"  Tile {tile_id}: {exc} (elapsed {elapsed:.1f}s); "
-            f"falling back to fba_onetile (recorded in {deblend_fail_path})"
+            f"falling back to fba_onetile (recorded in {decollided_fail_path})"
         )
         t1 = time.time()
-        result = fba_onetile(
-            tile_ra,
-            tile_dec,
-            tile_id,
-            gal_mtl,
-            neighboring_fiber_pairs,
-            fiberpos_xy,
-            eval_workers,
-        )
-        _log(f"  fba_onetile finished in {time.time() - t1:.2f}s")
-        return result
+        try:
+            result = _run_with_timeout(
+                fallback_timeout_sec,
+                fba_onetile,
+                tile_ra,
+                tile_dec,
+                tile_id,
+                gal_mtl,
+                neighboring_fiber_pairs,
+                fiberpos_xy,
+                eval_workers,
+            )
+            _log(f"  fba_onetile finished in {time.time() - t1:.2f}s")
+            return result
+        except Exception as fallback_exc:
+            _append_tile_id(tile_id, skipped_tiles_path)
+            _log(
+                f"  Tile {tile_id}: fba_onetile failed ({fallback_exc}); "
+                f"skipping assignment (recorded in {skipped_tiles_path})"
+            )
+            return None
 
 
 
@@ -270,10 +299,17 @@ def main():
         + f"{Npasses}passes/{N_tiles}tiles_{ra0:.1f}ra{ra1:.1f}_{dec0:.1f}dec{dec1:.1f}/seed{rand_seed}/"
     )
     os.makedirs(out_dir, exist_ok=True)
-    deblend_fail_path = _deblend_fail_path(out_dir)
-    if no_resume and os.path.isfile(deblend_fail_path):
-        os.remove(deblend_fail_path)
-    _log(f"Deblend timeout tile list: {deblend_fail_path}")
+    decollided_fail_path = _decollided_fail_path(out_dir)
+    skipped_tiles_path = _skipped_tiles_path(out_dir)
+    if no_resume:
+        for path in (decollided_fail_path, skipped_tiles_path):
+            if os.path.isfile(path):
+                os.remove(path)
+    _log(f"Decollided timeout tile list: {decollided_fail_path}")
+    _log(f"Skipped tile list: {skipped_tiles_path}")
+    skipped_tiles = _tile_ids_from_file(skipped_tiles_path)
+    if skipped_tiles:
+        _log(f"Resume: will skip {len(skipped_tiles)} previously failed tile(s)")
 
     nest = False
     mtl_dir = out_dir + f"/mtl_nside{nside}/"
@@ -356,6 +392,12 @@ def main():
             if not no_resume and tile_id in completed_tiles:
                 _log(f"Tile {tile_id}: skip (already exists) {out_fits}")
                 continue
+            if not no_resume and tile_id in skipped_tiles:
+                _log(
+                    f"Tile {tile_id}: skip (assignment previously failed; "
+                    f"see {skipped_tiles_path})"
+                )
+                continue
 
             pix_ids = _healpix_ids_for_disc(
                 tile_ra, tile_dec, near_radius_deg, nside, nest=nest
@@ -375,7 +417,7 @@ def main():
             )
 
             t_fba_start = time.time()
-            fba_result, targets_id_list_alltiles = _fba_onetile_deblend_or_fallback(
+            fba_out = _fba_onetile_decollided_or_fallback(
                 tile_ra,
                 tile_dec,
                 tile_id,
@@ -383,10 +425,18 @@ def main():
                 neighboring_fiber_pairs,
                 fiberpos_xy,
                 eval_workers,
-                deblend_fail_path,
+                decollided_fail_path,
+                skipped_tiles_path,
             )
             t_fba_end = time.time()
             _log(f"  fba total time: {t_fba_end - t_fba_start:.2f}s")
+            if fba_out is None:
+                skipped_tiles.add(int(tile_id))
+                _log(f"Tile {tile_id}: assignment skipped\n")
+                _log("=====================")
+                continue
+
+            fba_result, targets_id_list_alltiles = fba_out
 
             per_tile_assigned = defaultdict(lambda: {"target_ids": [], "fiber_ids": []})
             for _tid, _node in fba_result["target_to_fiber"].items():
@@ -438,10 +488,12 @@ def main():
 
         _log(f"pass {passid} running time (s): {time.time() - t0:.1f}")
 
-    if os.path.isfile(deblend_fail_path):
-        with open(deblend_fail_path, encoding="utf-8") as f:
-            n_fail = sum(1 for line in f if line.strip())
-        _log(f"Total tiles that timed out in fba_onetile_deblend: {n_fail} ({deblend_fail_path})")
+    if os.path.isfile(decollided_fail_path):
+        n_fail = len(_tile_ids_from_file(decollided_fail_path))
+        _log(f"Total tiles that timed out in fba_onetile_decollided: {n_fail} ({decollided_fail_path})")
+    if os.path.isfile(skipped_tiles_path):
+        n_skipped = len(_tile_ids_from_file(skipped_tiles_path))
+        _log(f"Total tiles skipped after fallback failure: {n_skipped} ({skipped_tiles_path})")
 
 
 if __name__ == "__main__":
