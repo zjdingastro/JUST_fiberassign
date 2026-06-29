@@ -18,6 +18,7 @@ import argparse
 import glob
 import gc
 import os
+import signal
 import sys
 import time
 from collections import defaultdict
@@ -40,9 +41,100 @@ from fba_single_tile import (
     _degrade_mtl_priorities_on_disk,
     _fits_path_for_tile,
     _healpix_ids_for_disc,
+    fba_onetile_deblend,
     fba_onetile,
     load_galaxies_from_mtlpix,
 )
+
+
+DEBLEND_TIMEOUT_SEC = 10.0
+
+
+class FBAOnetileTimeout(TimeoutError):
+    """Raised when fba_onetile_deblend exceeds the per-tile time limit."""
+
+
+def _run_with_timeout(timeout_sec, func, *args, **kwargs):
+    if timeout_sec is None or timeout_sec <= 0:
+        return func(*args, **kwargs)
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handler(signum, frame):
+        raise FBAOnetileTimeout(
+            f"{func.__name__} exceeded {timeout_sec:.0f}s"
+        )
+
+    signal.signal(signal.SIGALRM, _handler)
+    signal.setitimer(signal.ITIMER_REAL, float(timeout_sec))
+    try:
+        return func(*args, **kwargs)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def _deblend_fail_path(out_dir):
+    return os.path.join(out_dir, "fba_deblend_timeout_tiles.txt")
+
+
+def _record_deblend_fail(tile_id, fail_path):
+    """Append a TILEID that timed out in fba_onetile_deblend."""
+    with open(fail_path, "a", encoding="utf-8") as f:
+        f.write(f"{int(tile_id)}\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _fba_onetile_deblend_or_fallback(
+    tile_ra,
+    tile_dec,
+    tile_id,
+    gal_mtl,
+    neighboring_fiber_pairs,
+    fiberpos_xy,
+    eval_workers,
+    deblend_fail_path,
+    deblend_timeout_sec=DEBLEND_TIMEOUT_SEC,
+):
+    """Try fba_onetile_deblend; on timeout fall back to fba_onetile."""
+    t0 = time.time()
+    try:
+        result = _run_with_timeout(
+            deblend_timeout_sec,
+            fba_onetile_deblend,
+            tile_ra,
+            tile_dec,
+            tile_id,
+            gal_mtl,
+            neighboring_fiber_pairs,
+            fiberpos_xy,
+            eval_workers,
+        )
+        _log(
+            f"  fba_onetile_deblend finished in {time.time() - t0:.2f}s"
+        )
+        return result
+    except FBAOnetileTimeout as exc:
+        elapsed = time.time() - t0
+        _record_deblend_fail(tile_id, deblend_fail_path)
+        _log(
+            f"  Tile {tile_id}: {exc} (elapsed {elapsed:.1f}s); "
+            f"falling back to fba_onetile (recorded in {deblend_fail_path})"
+        )
+        t1 = time.time()
+        result = fba_onetile(
+            tile_ra,
+            tile_dec,
+            tile_id,
+            gal_mtl,
+            neighboring_fiber_pairs,
+            fiberpos_xy,
+            eval_workers,
+        )
+        _log(f"  fba_onetile finished in {time.time() - t1:.2f}s")
+        return result
+
 
 
 def _list_completed_tiles(out_dir):
@@ -178,6 +270,10 @@ def main():
         + f"{Npasses}passes/{N_tiles}tiles_{ra0:.1f}ra{ra1:.1f}_{dec0:.1f}dec{dec1:.1f}/seed{rand_seed}/"
     )
     os.makedirs(out_dir, exist_ok=True)
+    deblend_fail_path = _deblend_fail_path(out_dir)
+    if no_resume and os.path.isfile(deblend_fail_path):
+        os.remove(deblend_fail_path)
+    _log(f"Deblend timeout tile list: {deblend_fail_path}")
 
     nest = False
     mtl_dir = out_dir + f"/mtl_nside{nside}/"
@@ -279,7 +375,7 @@ def main():
             )
 
             t_fba_start = time.time()
-            fba_result, targets_id_list_alltiles = fba_onetile(
+            fba_result, targets_id_list_alltiles = _fba_onetile_deblend_or_fallback(
                 tile_ra,
                 tile_dec,
                 tile_id,
@@ -287,9 +383,10 @@ def main():
                 neighboring_fiber_pairs,
                 fiberpos_xy,
                 eval_workers,
+                deblend_fail_path,
             )
             t_fba_end = time.time()
-            _log(f"  fba process finished in {t_fba_end - t_fba_start:.2f}s")
+            _log(f"  fba total time: {t_fba_end - t_fba_start:.2f}s")
 
             per_tile_assigned = defaultdict(lambda: {"target_ids": [], "fiber_ids": []})
             for _tid, _node in fba_result["target_to_fiber"].items():
@@ -340,6 +437,11 @@ def main():
             _log("=====================")
 
         _log(f"pass {passid} running time (s): {time.time() - t0:.1f}")
+
+    if os.path.isfile(deblend_fail_path):
+        with open(deblend_fail_path, encoding="utf-8") as f:
+            n_fail = sum(1 for line in f if line.strip())
+        _log(f"Total tiles that timed out in fba_onetile_deblend: {n_fail} ({deblend_fail_path})")
 
 
 if __name__ == "__main__":
