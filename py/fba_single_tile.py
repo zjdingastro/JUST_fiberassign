@@ -225,21 +225,24 @@ def _avoid_nested_pool_in_solve():
     finally:
         _network_flow_module.multiprocessing.Pool = original_pool
 
-def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fiberpos_xy, eval_workers):
+def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fiberpos_xy, eval_workers):
     """
     tile_ra: float
     tile_dec: float
     tile_id: int
     gal_mtl: galaxy catalog select from healpixID fits files
-    
-    
+    neighboring_fiber_pairs: list of fiber pairs
+    fiberpos_xy: fiber positions in xy plane
+    eval_workers: number of workers for evaluation
+    Returns:
+    fba_result: dictionary containing the fiber assignment results
+    targets_id_list_alltiles_reachable: dictionary containing the target IDs for each tile that are reachable
     """
     in_tile = mask_targets_in_tile(
         tile_ra, tile_dec, gal_mtl["RA"], gal_mtl["DEC"],
         TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG,
     )
     gal_in_tile = gal_mtl[in_tile]
-    gal_in_tile_annulus = gal_in_tile
 
     n_before = len(np.unique(gal_in_tile["TARGETID"])) if len(gal_in_tile) else 0
     gal_in_tile = _select_priority_collision_free_targets(
@@ -276,7 +279,101 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
     targets_id_list_alltiles = {tile_key: targets_id_list}   # just one tile
 
     _, targets_id_list_reachable = find_targets_in_one_tile((
-        tile_id, tile_ra, tile_dec, gal_in_tile_annulus, fiberpos_xy,
+        tile_id, tile_ra, tile_dec, gal_in_tile, fiberpos_xy,
+        TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG, R_PATROL_DEG, "TARGETID",
+    ))
+    targets_id_list_alltiles_reachable = {tile_key: targets_id_list_reachable}
+    
+    target_positions = {
+        int(tid): (float(ra), float(dec))
+        for tid, ra, dec in zip(first_rows["TARGETID"], first_rows["RA"], first_rows["DEC"])
+    }
+
+    tiles_ra = np.asarray([tile_ra], dtype=np.float64)  # to make it as a list in order to use solve_tile_group function
+    tiles_dec = np.asarray([tile_dec], dtype=np.float64)
+    tiles_id_arr = np.asarray([tile_id], dtype=np.int64)
+
+    collision_constraints = find_collided_pairs_in_one_tile((
+        tile_key, 0, tiles_ra, tiles_dec, targets_id_list_alltiles,
+        neighboring_fiber_pairs, target_positions, fiberpos_xy,
+        COLLISION_SEPARATION_ARCSEC,
+    ))
+    n_pairs = sum(len(p) for p in collision_constraints.values())
+    _log(f"  Tile {tile_id}: {len(collision_constraints)} fiber-pair constraints, {n_pairs} target pairs")
+    
+    if eval_workers <= 1:
+        with _avoid_nested_pool_in_solve():
+            flow_dict, cost, forbidden, n_assigned, n_used_fibers = solve_tile_group(
+                target_positions, [0], targets_id_list_alltiles,
+                target_id_array_unique, priority, subpriority, collision_constraints,
+                COST_OVERFLOW, N_FIBERS,
+                max_iterations=max_iterations,
+                n_workers=eval_workers,
+                tiles_id=tiles_id_arr,
+            )
+    else:
+        flow_dict, cost, forbidden, n_assigned, n_used_fibers = solve_tile_group(
+            target_positions, [0], targets_id_list_alltiles,
+            target_id_array_unique, priority, subpriority, collision_constraints,
+            COST_OVERFLOW, N_FIBERS,
+            max_iterations=max_iterations,
+            n_workers=eval_workers,
+            tiles_id=tiles_id_arr,
+        )
+    _log(
+        f"  solve_tile_group finished: "
+        f"cost={cost:.2f}, assigned={n_assigned}, used_fibers={n_used_fibers}/{N_FIBERS}"
+    )
+    
+    fba_result = aggregate_group_assignments_with_pairwise_repair(
+        flow_dict=flow_dict,
+        target_ids=target_id_array_unique,
+        all_forbidden=set(),  # parameter can be removed
+        collision_constraints=collision_constraints,
+        gal_cat=gal_in_tile,
+        apply_repair=True,
+        verbose=True,
+    )
+    
+    return fba_result, targets_id_list_alltiles_reachable
+
+
+def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fiberpos_xy, eval_workers):
+    """
+    tile_ra: float
+    tile_dec: float
+    tile_id: int
+    gal_mtl: galaxy catalog select from healpixID fits files
+    neighboring_fiber_pairs: list of fiber pairs
+    fiberpos_xy: fiber positions in xy plane
+    eval_workers: number of workers for evaluation
+    """
+    in_tile = mask_targets_in_tile(
+        tile_ra, tile_dec, gal_mtl["RA"], gal_mtl["DEC"],
+        TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG,
+    )
+    gal_in_tile = gal_mtl[in_tile]
+
+    if len(gal_in_tile) == 0:
+        raise RuntimeError(
+            f"Tile {tile_id} ({tile_ra:.4f}, {tile_dec:.4f}): "
+            f"no targets in tile annulus"
+        )
+
+    _, first_idx = np.unique(gal_in_tile["TARGETID"], return_index=True)
+    first_rows = gal_in_tile[np.sort(first_idx)]
+    target_id_array_unique = first_rows["TARGETID"]
+    priority = first_rows["PRIORITY"]
+    subpriority = first_rows["SUBPRIORITY"]
+
+    tile_key, targets_id_list = find_targets_in_one_tile((
+        tile_id, tile_ra, tile_dec, gal_in_tile, fiberpos_xy,
+        TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG, R_PATROL_DEG, "TARGETID",
+    ))
+    targets_id_list_alltiles = {tile_key: targets_id_list}   # just one tile
+
+    _, targets_id_list_reachable = find_targets_in_one_tile((
+        tile_id, tile_ra, tile_dec, gal_in_tile, fiberpos_xy,
         TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG, R_PATROL_DEG, "TARGETID",
     ))
     targets_id_list_alltiles_reachable = {tile_key: targets_id_list_reachable}
