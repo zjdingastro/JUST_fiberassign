@@ -328,7 +328,6 @@ def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fibe
     fba_result = aggregate_group_assignments_with_pairwise_repair(
         flow_dict=flow_dict,
         target_ids=target_id_array_unique,
-        all_forbidden=set(),  # parameter can be removed
         collision_constraints=collision_constraints,
         gal_cat=gal_in_tile,
         apply_repair=True,
@@ -422,7 +421,6 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
     fba_result = aggregate_group_assignments_with_pairwise_repair(
         flow_dict=flow_dict,
         target_ids=target_id_array_unique,
-        all_forbidden=set(),  # parameter can be removed
         collision_constraints=collision_constraints,
         gal_cat=gal_in_tile,
         apply_repair=True,

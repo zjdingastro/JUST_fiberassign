@@ -442,7 +442,6 @@ def solve_tile_group(target_positions, group_tile_indices, targets_id_list_allti
 def aggregate_group_assignments_with_pairwise_repair(
     flow_dict,
     target_ids,
-    all_forbidden,
     collision_constraints,
     gal_cat,
     apply_repair=True,
