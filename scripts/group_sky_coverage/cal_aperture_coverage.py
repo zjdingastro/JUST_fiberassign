@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-# python cal_aperture_coverage.py --LOG_MASS_THRESHOLD 14.0 --R_AP_DEFAULT 8.0
+# python cal_aperture_coverage.py --LOG_MASS_THRESHOLD 14.0 --R_AP_DEFAULT 8.0 --Z_MIN 0.0 --Z_MAX 1.25
 
 """
 Compute the sky fraction covered by galaxy-cluster apertures.
@@ -256,33 +256,36 @@ def main():
     parser = argparse.ArgumentParser(description='Compute aperture coverage for galaxy clusters')
     parser.add_argument("--LOG_MASS_THRESHOLD", type=float, default=14.0)
     parser.add_argument("--R_AP_DEFAULT", type=float, default=8.0)
+    parser.add_argument("--Z_MIN", type=float, default=0.0)
+    parser.add_argument("--Z_MAX", type=float, default=1.25)
     args = parser.parse_args()
+    LOG_MASS_THRESHOLD = args.LOG_MASS_THRESHOLD  # default 14.0 (10^14 Msol/h)
+    R_AP_DEFAULT = args.R_AP_DEFAULT  # default 8.0 (Mpc/h)
+    Z_MIN = args.Z_MIN
+    Z_MAX = args.Z_MAX
+    print(f"   LOG_MASS_THRESHOLD = {LOG_MASS_THRESHOLD}")
+    print(f"   R_AP_DEFAULT = {R_AP_DEFAULT}")
+    print(f"   Z_MIN = {Z_MIN}")
+    print(f"   Z_MAX = {Z_MAX}")
+
     # ============================================================================ #
     # Cosmology and constants
-    # ============================================================================ #
-
-    # Planck 2018-like parameters with h = 0.7
     cosmo = DEFAULT_COSMO
     h = H
 
-    RA_MIN, RA_MAX = 0., 90.
+    RA_MIN, RA_MAX = 0., 90.  # based on the input catalog
     DEC_MIN, DEC_MAX = 0., 90.
 
     # Default parameters
     SURVEY_AREA_DEG2 = get_spherearea(RA_MIN, RA_MAX, DEC_MIN, DEC_MAX)
     print("SURVEY_AREA_DEG2 = %.1f deg^2"%SURVEY_AREA_DEG2)
-    LOG_MASS_THRESHOLD = args.LOG_MASS_THRESHOLD  # default 14.0 (10^14 Msol/h)
-    R_AP_DEFAULT = args.R_AP_DEFAULT  # default 8.0 (Mpc/h)
-
-
+    
     # Load group catalog
     ifile = "/home/zjding/fiberassignment/JUST/BGS_mock/Junyu_mock/data/v1/lightcone_ra_0_90_dec_0_90_rmagcut20.5.fits"
     gal_cat = Table.read(ifile)
     mask = (np.log10(gal_cat["Mh"])> LOG_MASS_THRESHOLD)&(gal_cat["type"]==1) # approximate the galaxy cluster sample
     group_cat = gal_cat[mask]
-    print(f"   contains {len(group_cat)} clusters")
-    Z_MIN = 0.0
-    Z_MAX = 1.25
+    print(f"   contains {len(group_cat)} clusters with mass cut only")
 
     group_cat["logMh"] = np.log10(group_cat["Mh"])
     group_cat.rename_column("ra", "RA")
@@ -305,7 +308,8 @@ def main():
         ra_range = (RA_MIN, RA_MAX),
         dec_range = (DEC_MIN, DEC_MAX)
     )
-    print(f"   contains {len(catalog)} clusters after redshift and sky footprint cuts")
+    print(f"   contains {len(catalog)} clusters with additional redshift (and sky footprint) cuts")
+    print(f"   cluster surface number density: {len(catalog)/SURVEY_AREA_DEG2:.2f} clusters/deg^2")
     print(f"   log10(mass) range: {catalog[:, 3].min():.2e} - {catalog[:, 3].max():.2e} Msol/h")
     print(f"   redshift range: {catalog[:, 2].min():.3f} - {catalog[:, 2].max():.3f}")
 
@@ -365,8 +369,9 @@ def main():
     sm.set_array([])
     cbar = plt.colorbar(sm, ax=ax)
     cbar.set_label('redshift')
-    os.makedirs("./figs", exist_ok=True)
-    plt.savefig("./figs/group_skycover_logMh%s_R%.1f.png"%(str(LOG_MASS_THRESHOLD), R_AP_DEFAULT), dpi=150, bbox_inches='tight')
+    outdir = "./figs/sky_coverage/%.2fz%.2f/"%(Z_MIN, Z_MAX)
+    os.makedirs(outdir, exist_ok=True)
+    plt.savefig(outdir+"cluster_skycover_logMh%s_R%.1f.png"%(str(LOG_MASS_THRESHOLD), R_AP_DEFAULT), dpi=150, bbox_inches='tight')
 
 if __name__ == "__main__":
     main()
