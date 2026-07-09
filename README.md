@@ -210,5 +210,5 @@ MIT License. See package metadata in `setup.py`.
 
 ## References
 
-- DESI fiber assignment: [desihub/desi](https://github.com/desihub/desi)
-- Network-flow fiber assignment methods follow ideas from large-scale spectroscopic survey design (e.g., SDSS BOSS)
+- DESI fiber assignment: [desihub/fiberassign](https://github.com/desihub/fiberassign)
+- Network-flow fiber assignment methods follow ideas from the SDSS survey design [Blanton et al. 2003](https://iopscience.iop.org/article/10.1086/344761)
