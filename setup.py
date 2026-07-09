@@ -22,16 +22,17 @@ LONG_DESCRIPTION = read_readme()
 LONG_DESCRIPTION_CONTENT_TYPE = 'text/markdown'
 AUTHOR = 'JUST Telescope Team'
 AUTHOR_EMAIL = 'just-telescope@example.com'
-URL = 'https://github.com/just-telescope/JUST_fiberassign'
+URL = 'https://github.com/zjdingastro/JUST_fiberassign'
 LICENSE = 'MIT'
 
-# Required packages
+# Required packages (core library + MCF workflows in py/ and scripts/)
 INSTALL_REQUIRES = [
     'numpy>=1.19.0',
     'scipy>=1.7.0',
     'astropy>=4.0',
     'pandas>=1.3.0',
     'networkx>=2.6',
+    'healpy>=1.14.0',
 ]
 
 # Optional packages
@@ -97,7 +98,7 @@ setup(
 
     # Project URLs
     project_urls={
-        'Source': '',
-        'Tracker': '',
+        'Source': 'https://github.com/zjdingastro/JUST_fiberassign',
+        'Tracker': 'https://github.com/zjdingastro/JUST_fiberassign/issues',
     },
 )
