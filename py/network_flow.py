@@ -98,9 +98,8 @@ def build_graph_with_forbidden_assignments(
     priority_dict = {}
     subpriority_dict = {}
     for target_id, pri, subpri in zip(target_id_array_unique, priority, subpriority):
-        #priority_dict[target_id] = max(float(pri) + float(subpri), 1e-12)
-        priority_dict[target_id] = pri
-        subpriority_dict[target_id] = subpri
+        priority_dict[target_id] = max(float(pri), 1e-12)
+        subpriority_dict[target_id] = float(subpri)
         target_node = f"t_{target_id}"
         G.add_node(target_node, demand=0)
         G.add_edge("source", target_node, capacity=1, weight=0)

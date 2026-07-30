@@ -28,6 +28,43 @@ N_FIBERS = 2184
 
 max_iterations=1   # does not matter for the debelended set of targets
 
+
+class FBASolveFailed(RuntimeError):
+    """Raised when solve_tile_group returns no feasible flow."""
+
+
+def _galaxies_in_tile_annulus(tile_ra, tile_dec, gal_mtl):
+    in_tile = mask_targets_in_tile(
+        tile_ra, tile_dec, gal_mtl["RA"], gal_mtl["DEC"],
+        TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG,
+    )
+    return gal_mtl[in_tile]
+
+
+def _tile_has_reachable_targets(targets_id_list):
+    if not targets_id_list:
+        return False
+    return any(len(tlist) > 0 for tlist in targets_id_list.values())
+
+
+def _skip_tile(tile_id, tile_ra, tile_dec, reason):
+    _log(
+        f"  Tile {tile_id} ({tile_ra:.4f}, {tile_dec:.4f}): {reason}; skipping"
+    )
+    return None
+
+
+def _log_solve_tile_group_result(flow_dict, cost, n_assigned, n_used_fibers, n_fibers, tile_id):
+    if flow_dict is None:
+        raise FBASolveFailed(
+            f"Tile {tile_id}: solve_tile_group returned no feasible assignment"
+        )
+    cost_str = f"{float(cost):.2f}" if cost is not None else "n/a"
+    _log(
+        f"  solve_tile_group finished: "
+        f"cost={cost_str}, assigned={n_assigned}, used_fibers={n_used_fibers}/{n_fibers}"
+    )
+
 def _fits_path_for_tile(out_dir, tile_id):
     return os.path.join(out_dir, f"fba_tile_{int(tile_id)}.fits")
 
@@ -238,33 +275,30 @@ def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fibe
     fba_result: dictionary containing the fiber assignment results
     targets_id_list_alltiles_reachable: dictionary containing the target IDs for each tile that are reachable
     """
-    in_tile = mask_targets_in_tile(
-        tile_ra, tile_dec, gal_mtl["RA"], gal_mtl["DEC"],
-        TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG,
-    )
-    gal_in_tile = gal_mtl[in_tile]
-
+    gal_in_tile = _galaxies_in_tile_annulus(tile_ra, tile_dec, gal_mtl)
     n_before = len(np.unique(gal_in_tile["TARGETID"])) if len(gal_in_tile) else 0
+    if n_before == 0:
+        return _skip_tile(tile_id, tile_ra, tile_dec, "no targets in tile annulus")
+
     gal_in_tile = _select_priority_collision_free_targets(
         gal_in_tile, COLLISION_SEPARATION_ARCSEC
     )
     n_after = len(np.unique(gal_in_tile["TARGETID"])) if len(gal_in_tile) else 0
-    if n_before:
-        kept_priority = float(
-            np.sum(gal_in_tile["PRIORITY"] + gal_in_tile["SUBPRIORITY"])
-        )
-        _log(
-            f"  Tile {tile_id}: priority-weighted collision-free subset "
-            f"{n_after}/{n_before} targets "
-            f"(sep > {COLLISION_SEPARATION_ARCSEC} arcsec, "
-            f"sum priority+subpriority={kept_priority:.1f})"
+    if n_after == 0:
+        return _skip_tile(
+            tile_id, tile_ra, tile_dec,
+            "no collision-free targets in tile annulus",
         )
 
-    if len(gal_in_tile) == 0:
-        raise RuntimeError(
-            f"Tile {tile_id} ({tile_ra:.4f}, {tile_dec:.4f}): "
-            f"no targets in tile annulus"
-        )
+    kept_priority = float(
+        np.sum(gal_in_tile["PRIORITY"] + gal_in_tile["SUBPRIORITY"])
+    )
+    _log(
+        f"  Tile {tile_id}: priority-weighted collision-free subset "
+        f"{n_after}/{n_before} targets "
+        f"(sep > {COLLISION_SEPARATION_ARCSEC} arcsec, "
+        f"sum priority+subpriority={kept_priority:.1f})"
+    )
 
     _, first_idx = np.unique(gal_in_tile["TARGETID"], return_index=True)
     first_rows = gal_in_tile[np.sort(first_idx)]
@@ -277,6 +311,10 @@ def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fibe
         TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG, R_PATROL_DEG, "TARGETID",
     ))
     targets_id_list_alltiles = {tile_key: targets_id_list}   # just one tile
+    if not _tile_has_reachable_targets(targets_id_list):
+        return _skip_tile(
+            tile_id, tile_ra, tile_dec, "no fiber-reachable targets in tile annulus",
+        )
 
     _, targets_id_list_reachable = find_targets_in_one_tile((
         tile_id, tile_ra, tile_dec, gal_in_tile, fiberpos_xy,
@@ -320,9 +358,9 @@ def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fibe
             n_workers=eval_workers,
             tiles_id=tiles_id_arr,
         )
-    _log(
-        f"  solve_tile_group finished: "
-        f"cost={cost:.2f}, assigned={n_assigned}, used_fibers={n_used_fibers}/{N_FIBERS}"
+
+    _log_solve_tile_group_result(
+        flow_dict, cost, n_assigned, n_used_fibers, N_FIBERS, tile_id
     )
     
     fba_result = aggregate_group_assignments_with_pairwise_repair(
@@ -347,17 +385,9 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
     fiberpos_xy: fiber positions in xy plane
     eval_workers: number of workers for evaluation
     """
-    in_tile = mask_targets_in_tile(
-        tile_ra, tile_dec, gal_mtl["RA"], gal_mtl["DEC"],
-        TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG,
-    )
-    gal_in_tile = gal_mtl[in_tile]
-
-    if len(gal_in_tile) == 0:
-        raise RuntimeError(
-            f"Tile {tile_id} ({tile_ra:.4f}, {tile_dec:.4f}): "
-            f"no targets in tile annulus"
-        )
+    gal_in_tile = _galaxies_in_tile_annulus(tile_ra, tile_dec, gal_mtl)
+    if len(gal_in_tile) == 0 or len(np.unique(gal_in_tile["TARGETID"])) == 0:
+        return _skip_tile(tile_id, tile_ra, tile_dec, "no targets in tile annulus")
 
     _, first_idx = np.unique(gal_in_tile["TARGETID"], return_index=True)
     first_rows = gal_in_tile[np.sort(first_idx)]
@@ -370,6 +400,10 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
         TILE_INNER_RADIUS_DEG, TILE_OUTER_RADIUS_DEG, R_PATROL_DEG, "TARGETID",
     ))
     targets_id_list_alltiles = {tile_key: targets_id_list}   # just one tile
+    if not _tile_has_reachable_targets(targets_id_list):
+        return _skip_tile(
+            tile_id, tile_ra, tile_dec, "no fiber-reachable targets in tile annulus",
+        )
 
     _, targets_id_list_reachable = find_targets_in_one_tile((
         tile_id, tile_ra, tile_dec, gal_in_tile, fiberpos_xy,
@@ -413,10 +447,14 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
             n_workers=eval_workers,
             tiles_id=tiles_id_arr,
         )
-    _log(
-        f"  solve_tile_group finished: "
-        f"cost={cost:.2f}, assigned={n_assigned}, used_fibers={n_used_fibers}/{N_FIBERS}"
-    )
+
+    try:
+        _log_solve_tile_group_result(
+            flow_dict, cost, n_assigned, n_used_fibers, N_FIBERS, tile_id
+        )
+    except FBASolveFailed as exc:
+        _log(f"  {exc}; skipping tile")
+        return None
     
     fba_result = aggregate_group_assignments_with_pairwise_repair(
         flow_dict=flow_dict,
