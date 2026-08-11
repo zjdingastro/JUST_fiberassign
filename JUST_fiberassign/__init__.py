@@ -7,7 +7,6 @@ to astronomical targets for the Jiao Tong University Spectroscopic Telescope (JU
 
 from .assign import assign_targets_greedy
 from .utils import *
-from .fiber_motion import *
 
 __version__ = "0.1.0"
 __author__ = "JUST Telescope Team"

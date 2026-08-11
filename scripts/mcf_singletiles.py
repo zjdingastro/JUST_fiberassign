@@ -18,7 +18,7 @@ import multiprocessing
 import contextlib
 from numpy.random import Generator, PCG64
 from collections import defaultdict
-sys.path.append("/home/zjding/installed_packages/JUST_fiberassign/py/")
+sys.path.append("/home/zjding/installed_packages/JUST_fiberassign/JUST_fiberassign/")
 from utils import (
     get_fiberpos, write_fba_onetile,
     mask_targets_in_tile,

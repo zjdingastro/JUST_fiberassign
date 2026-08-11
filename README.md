@@ -14,7 +14,7 @@
 
 ```
 JUST_fiberassign/
-├── py/                         # Core library
+├── JUST_fiberassign/           # Core library
 │   ├── assign.py               # Greedy fiber assignment
 │   ├── network_flow.py         # Min-cost-flow solver and collision handling
 │   ├── fba_single_tile.py      # Single-tile MCF workflow (with decolliding)
@@ -71,14 +71,14 @@ pip install -e ".[visualization]"
 
 ### Using scripts without installing
 
-The scripts under `scripts/` expect the `py/` directory on `PYTHONPATH`. Either install the package as above, or run from the repository root with:
+The scripts under `scripts/` expect the `JUST_fiberassign/` package on `PYTHONPATH`. Either install the package as above, or run from the repository root with:
 
 ```bash
-export PYTHONPATH="/path/to/JUST_fiberassign/py:${PYTHONPATH}"
+export PYTHONPATH="/path/to/JUST_fiberassign:${PYTHONPATH}"
 python scripts/mcf_singletiles_decollided.py --help
 ```
 
-## Core library (`py/`)
+## Core library (`JUST_fiberassign/`)
 
 | Module | Description |
 |--------|-------------|
@@ -188,7 +188,7 @@ MTL pixel catalogs are stored under `mtl_nside<NSIDE>/mtl_healpix_<PIXID>.fits` 
 
 ## Instrument parameters
 
-Default values in `py/parameters.py`:
+Default values in `JUST_fiberassign/parameters.py`:
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|

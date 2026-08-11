@@ -1,3 +1,2 @@
 [console_scripts]
 just-fiber-assign = scripts.assign_targets:main
-

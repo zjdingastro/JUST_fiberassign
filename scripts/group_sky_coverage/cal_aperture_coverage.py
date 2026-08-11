@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from scipy.spatial import cKDTree
 warnings.filterwarnings('ignore')
-sys.path.append("/home/zjding/installed_packages/JUST_fiberassign/py/")
+sys.path.append("/home/zjding/installed_packages/JUST_fiberassign/JUST_fiberassign/")
 from utils import get_spherearea
 import argparse
 

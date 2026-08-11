@@ -3,6 +3,7 @@ scipy>=1.7.0
 astropy>=4.0
 pandas>=1.3.0
 networkx>=2.6
+healpy>=1.14.0
 
 [all]
 matplotlib>=3.3.0

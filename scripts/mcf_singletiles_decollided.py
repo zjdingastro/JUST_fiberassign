@@ -28,7 +28,7 @@ import numpy as np
 from astropy.table import Table
 from numpy.random import Generator, PCG64
 
-sys.path.append("/home/zjding/installed_packages/JUST_fiberassign/py/")
+sys.path.append("/home/zjding/installed_packages/JUST_fiberassign/JUST_fiberassign/")
 from parameters import (
     COLLISION_SEPARATION_ARCSEC,
     COLLISION_SEPARATION_DEG,

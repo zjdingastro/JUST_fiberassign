@@ -25,7 +25,7 @@ AUTHOR_EMAIL = 'just-telescope@example.com'
 URL = 'https://github.com/zjdingastro/JUST_fiberassign'
 LICENSE = 'MIT'
 
-# Required packages (core library + MCF workflows in py/ and scripts/)
+# Required packages (core library + MCF workflows in scripts/)
 INSTALL_REQUIRES = [
     'numpy>=1.19.0',
     'scipy>=1.7.0',
@@ -88,7 +88,7 @@ setup(
 
     # Additional files to include
     package_data={
-        'py': [
+        'JUST_fiberassign': [
             'survey_strategy/input/*.fits',
         ],
     },
