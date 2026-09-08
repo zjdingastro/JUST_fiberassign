@@ -23,10 +23,9 @@ import network_flow as _network_flow_module
 import contextlib
 
 
-COST_OVERFLOW = 10000.0   # self defined, can be dependent on target priority
+#COST_OVERFLOW = 10000.0   # self defined, can be dependent on target priority
+COST_OVERFLOW = 10_000_000   # self defined, can be dependent on target priority
 N_FIBERS = 2184
-
-max_iterations=1   # does not matter for the debelended set of targets
 
 
 class FBASolveFailed(RuntimeError):
@@ -262,7 +261,7 @@ def _avoid_nested_pool_in_solve():
     finally:
         _network_flow_module.multiprocessing.Pool = original_pool
 
-def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fiberpos_xy, eval_workers):
+def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fiberpos_xy, eval_workers, max_iterations=None):
     """
     tile_ra: float
     tile_dec: float
@@ -271,10 +270,13 @@ def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fibe
     neighboring_fiber_pairs: list of fiber pairs
     fiberpos_xy: fiber positions in xy plane
     eval_workers: number of workers for evaluation
+    max_iterations: maximum number of iterations for solve_tile_group; defaults to the module-level value
     Returns:
     fba_result: dictionary containing the fiber assignment results
     targets_id_list_alltiles_reachable: dictionary containing the target IDs for each tile that are reachable
     """
+    if max_iterations is None:
+        max_iterations = globals().get("max_iterations", 1)
     gal_in_tile = _galaxies_in_tile_annulus(tile_ra, tile_dec, gal_mtl)
     n_before = len(np.unique(gal_in_tile["TARGETID"])) if len(gal_in_tile) else 0
     if n_before == 0:
@@ -375,7 +377,7 @@ def fba_onetile_decollided(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fibe
     return fba_result, targets_id_list_alltiles_reachable
 
 
-def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fiberpos_xy, eval_workers):
+def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fiberpos_xy, eval_workers, max_iterations=None):
     """
     tile_ra: float
     tile_dec: float
@@ -384,7 +386,10 @@ def fba_onetile(tile_ra, tile_dec, tile_id, gal_mtl, neighboring_fiber_pairs, fi
     neighboring_fiber_pairs: list of fiber pairs
     fiberpos_xy: fiber positions in xy plane
     eval_workers: number of workers for evaluation
+    max_iterations: maximum number of iterations for solve_tile_group; defaults to the module-level value
     """
+    if max_iterations is None:
+        max_iterations = globals().get("max_iterations", 1)
     gal_in_tile = _galaxies_in_tile_annulus(tile_ra, tile_dec, gal_mtl)
     if len(gal_in_tile) == 0 or len(np.unique(gal_in_tile["TARGETID"])) == 0:
         return _skip_tile(tile_id, tile_ra, tile_dec, "no targets in tile annulus")
