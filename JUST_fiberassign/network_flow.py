@@ -86,6 +86,7 @@ def build_graph_with_forbidden_assignments(
     N_fibers,
     forbidden_assignments=None,
 ):
+    scale_factor = 10_000
     if forbidden_assignments is None:
         forbidden_assignments = set()
 
@@ -122,7 +123,7 @@ def build_graph_with_forbidden_assignments(
                 target_node = f"t_{target_id}"
                 ##priority_total = priority_dict[target_id]
                 ##G.add_edge(target_node, fiber_in, capacity=1, weight = 1.0/priority_total)
-                G.add_edge(target_node, fiber_in, capacity=1, weight=COST_OVERFLOW / priority_dict[target_id] - subpriority_dict[target_id])
+                G.add_edge(target_node, fiber_in, capacity=1, weight=int(round(scale_factor * (100.0/ priority_dict[target_id] - subpriority_dict[target_id]))))
 
             G.add_edge(fiber_out, tile_id, capacity=1, weight=0)
 
